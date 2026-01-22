@@ -93,6 +93,22 @@ const saveReferralSource = async (req, res, next) => {
 
     await referral.save();
 
+    // Also update the user's whereYouHeardAboutUs field
+    // Determine the primary source based on what's provided
+    let whereYouHeardAboutUs = "Other";
+    if (socialMediaOrAd && Object.keys(socialMediaOrAd).length > 0) {
+      whereYouHeardAboutUs = "Social Media";
+    } else if (wordOfMouth && Object.keys(wordOfMouth).length > 0) {
+      whereYouHeardAboutUs = "Friend Recommendation";
+    } else if (webSearch && Object.keys(webSearch).length > 0) {
+      whereYouHeardAboutUs = "Search Engine";
+    } else if (podcast || creator || email) {
+      whereYouHeardAboutUs = "Advertisement";
+    }
+
+    user.whereYouHeardAboutUs = whereYouHeardAboutUs;
+    await user.save();
+
     res.sendSuccess({ referralId: referral._id }, "Referral source saved");
   } catch (error) {
     next(error);
@@ -407,6 +423,31 @@ const updateUserProfile = async (req, res, next) => {
   }
 };
 
+// ============== WELCOME SCREEN ==============
+
+/**
+ * Mark welcome screen as seen
+ */
+const markWelcomeSeen = async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { hasSeenWelcome: true },
+      { new: true }
+    );
+
+    if (!user) {
+      return res.sendError("User not found", 404);
+    }
+
+    res.sendSuccess({ hasSeenWelcome: true }, "Welcome screen marked as seen");
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   saveOnboardingAnswers,
   getOnboardingAnswers,
@@ -420,4 +461,5 @@ module.exports = {
   updateUserProfile,
   saveReferralSource,
   getReferralSource,
+  markWelcomeSeen,
 };

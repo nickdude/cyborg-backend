@@ -247,6 +247,14 @@ const login = async (req, res, next) => {
       // Password is valid, generate and return token
       const token = user.generateToken();
 
+      // Check for active subscription
+      const Subscription = require("../models/Subscription");
+      const activeSubscription = await Subscription.findOne({
+        userId: user._id,
+        status: "active",
+        expiryDate: { $gt: new Date() },
+      });
+
       return res.sendSuccess(
         {
           token,
@@ -258,6 +266,9 @@ const login = async (req, res, next) => {
             lastName: user.lastName,
             userType: user.userType,
             onboardingCompleted: user.onboardingCompleted,
+            whereYouHeardAboutUs: user.whereYouHeardAboutUs,
+            hasSeenWelcome: user.hasSeenWelcome,
+            hasActiveSubscription: !!activeSubscription,
           },
         },
         "Login successful",
@@ -331,6 +342,14 @@ const verifyLoginOTP = async (req, res, next) => {
     // Generate token
     const token = user.generateToken();
 
+    // Check for active subscription
+    const Subscription = require("../models/Subscription");
+    const activeSubscription = await Subscription.findOne({
+      userId: user._id,
+      status: "active",
+      expiryDate: { $gt: new Date() },
+    });
+
     res.sendSuccess(
       {
         token,
@@ -342,6 +361,9 @@ const verifyLoginOTP = async (req, res, next) => {
           lastName: user.lastName,
           userType: user.userType,
           onboardingCompleted: user.onboardingCompleted,
+          whereYouHeardAboutUs: user.whereYouHeardAboutUs,
+          hasSeenWelcome: user.hasSeenWelcome,
+          hasActiveSubscription: !!activeSubscription,
         },
       },
       "Login successful",

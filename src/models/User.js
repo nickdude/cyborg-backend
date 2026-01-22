@@ -108,6 +108,12 @@ const userSchema = new mongoose.Schema(
       ref: "OnboardingAnswer",
     },
 
+    // Welcome Screen
+    hasSeenWelcome: {
+      type: Boolean,
+      default: false,
+    },
+
     // Blood Report
     bloodReports: [
       {

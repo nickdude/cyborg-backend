@@ -36,6 +36,13 @@ router.get(
   userController.getReferralSource
 );
 
+// ============== WELCOME SCREEN ==============
+router.post(
+  "/:userId/welcome-seen",
+  verifyToken,
+  userController.markWelcomeSeen
+);
+
 // ============== BLOOD REPORTS ==============
 router.post(
   "/:userId/blood-reports",
