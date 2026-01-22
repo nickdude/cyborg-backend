@@ -188,16 +188,25 @@ const login = async (req, res, next) => {
   try {
     const { email, phone } = req.body;
 
+    // Build dynamic $or query - only include provided fields
+    const orConditions = [];
+    if (email) orConditions.push({ email });
+    if (phone) orConditions.push({ phone });
+
+    if (orConditions.length === 0) {
+      return res.sendError("Email or phone is required", 400);
+    }
+
     // Find user
     const user = await User.findOne({
-      $or: [{ email: email || null }, { phone: phone || null }],
+      $or: orConditions,
       isDeleted: false,
     }).select("+password");
 
     if (!user) {
       return res.sendError("User not found. Please register first.", 404);
     }
-
+    
     // Check if email/phone is verified
     const type = email ? "email" : "phone";
     const verifiedField = `${type}Verified`;
