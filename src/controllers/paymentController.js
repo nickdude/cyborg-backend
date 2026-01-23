@@ -78,7 +78,26 @@ const getAllPlans = async (req, res, next) => {
  */
 const createOrder = async (req, res, next) => {
   try {
-    const { userId, planType } = req.body;
+    const { userId, planType, firstName, lastName, email, zip, dob, phone } = req.body;
+
+    // Validate required fields
+    if (!userId || !planType) {
+      return res.sendError("User ID and plan type are required", 400);
+    }
+
+    if (!firstName || !lastName || !email || !zip || !dob || !phone) {
+      return res.sendError("All user details are required (firstName, lastName, email, zip, dob, phone)", 400);
+    }
+
+    // Update user details before creating order
+    await User.findByIdAndUpdate(userId, {
+      firstName,
+      lastName,
+      email,
+      phone,
+      zipCode: zip,
+      dateOfBirth: new Date(dob),
+    });
 
     // Validate plan type
     const plans = {
