@@ -8,6 +8,7 @@ const userRoutes = require("./routes/userRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const actionPlanRoutes = require("./routes/actionPlanRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
+const chatRoutes = require("./routes/chatRoutes");
 
 const app = express();
 
@@ -39,6 +40,9 @@ app.use("/api/action-plans", actionPlanRoutes);
 
 // Notification Routes
 app.use("/api/notifications", notificationRoutes);
+
+// Chat Routes
+app.use("/api/chat", chatRoutes);
 
 // 404 handler
 app.use((req, res) => {

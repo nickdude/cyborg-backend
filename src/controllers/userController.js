@@ -359,10 +359,16 @@ const getUserProfile = async (req, res, next) => {
       email: user.email,
       phone: user.phone,
       userType: user.userType,
+      biologicalSex: user.biologicalSex,
       gender: user.gender,
       dateOfBirth: user.dateOfBirth,
       bio: user.bio,
       profilePicture: user.profilePicture,
+      addressLine1: user.addressLine1,
+      addressLine2: user.addressLine2,
+      city: user.city,
+      state: user.state,
+      zipCode: user.zipCode,
       emailVerified: user.emailVerified,
       phoneVerified: user.phoneVerified,
       onboardingCompleted: user.onboardingCompleted,
@@ -448,6 +454,21 @@ const markWelcomeSeen = async (req, res, next) => {
   }
 };
 
+/**
+ * Get all users (for doctor dashboard)
+ */
+const getAllUsers = async (req, res, next) => {
+  try {
+    const users = await User.find({ userType: "user" })
+      .select("firstName lastName email phone age registrationDate status")
+      .sort({ createdAt: -1 });
+
+    res.sendSuccess(users, "Users retrieved successfully");
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   saveOnboardingAnswers,
   getOnboardingAnswers,
@@ -462,4 +483,5 @@ module.exports = {
   saveReferralSource,
   getReferralSource,
   markWelcomeSeen,
+  getAllUsers,
 };

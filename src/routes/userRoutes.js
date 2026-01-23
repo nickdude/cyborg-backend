@@ -4,6 +4,9 @@ const userController = require("../controllers/userController");
 const { verifyToken, checkRole } = require("../middlewares/authMiddleware");
 const upload = require("../config/multer");
 
+// Get all users (for doctor dashboard)
+router.get("/", verifyToken, checkRole(["doctor"]), userController.getAllUsers);
+
 // Get user profile
 router.get("/:userId/profile", verifyToken, userController.getUserProfile);
 
