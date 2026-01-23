@@ -10,6 +10,8 @@ const actionPlanRoutes = require("./routes/actionPlanRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const chatRoutes = require("./routes/chatRoutes");
 const questionnaireRoutes = require("./routes/questionnaireRoutes");
+const conciergeRoutes = require("./routes/conciergeRoutes");
+const doctorRoutes = require("./routes/doctorRoutes");
 
 const app = express();
 
@@ -47,6 +49,12 @@ app.use("/api/chat", chatRoutes);
 
 // Questionnaire Routes
 app.use("/api/questionnaire", questionnaireRoutes);
+
+// Concierge Routes
+app.use("/api/concierge", conciergeRoutes);
+
+// Doctor Routes
+app.use("/api/doctor", doctorRoutes);
 
 // 404 handler
 app.use((req, res) => {

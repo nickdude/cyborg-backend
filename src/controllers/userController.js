@@ -3,6 +3,7 @@ const OnboardingAnswer = require("../models/OnboardingAnswer");
 const BloodReport = require("../models/BloodReport");
 const ReferralSource = require("../models/ReferralSource");
 const axios = require("axios");
+const { analyzeBloodReport, prepareAIAnalysisData } = require("../utils/bloodReportAI");
 
 // ============== ONBOARDING ==============
 
@@ -185,6 +186,11 @@ const uploadBloodReport = async (req, res, next) => {
     user.bloodReports.push(bloodReport._id);
     await user.save();
 
+    // Prepare and send data to AI for analysis (async, don't wait)
+    processBloodReportWithAI(userId, bloodReport._id).catch((error) => {
+      console.error("AI analysis failed:", error.message);
+    });
+
     res.sendSuccess(
       {
         reportId: bloodReport._id,
@@ -196,6 +202,47 @@ const uploadBloodReport = async (req, res, next) => {
     );
   } catch (error) {
     next(error);
+  }
+};
+
+/**
+ * Process blood report with AI analysis (background task)
+ */
+const processBloodReportWithAI = async (userId, bloodReportId) => {
+  try {
+    console.log(`[AI Analysis] Starting analysis for report ${bloodReportId}`);
+
+    // Prepare all required data
+    const analysisData = await prepareAIAnalysisData(userId, bloodReportId);
+
+    console.log(`[AI Analysis] Data prepared:`, {
+      questionnaireId: analysisData.questionnaireId,
+      userId: analysisData.userId,
+      bloodReportId: analysisData.bloodReportId,
+      answersCount: Object.keys(analysisData.onboardingAnswers).length,
+    });
+
+    // Send to AI for analysis
+    const aiResponse = await analyzeBloodReport(analysisData);
+
+    console.log(`[AI Analysis] Analysis completed:`, {
+      reportId: aiResponse.reportId,
+      confidence: aiResponse.aiMetadata.confidence,
+      findingsCount: aiResponse.insights.keyFindings.length,
+    });
+
+    // Update blood report with AI analysis
+    const bloodReport = await BloodReport.findById(bloodReportId);
+    if (bloodReport) {
+      bloodReport.actionPlan = JSON.stringify(aiResponse);
+      await bloodReport.save();
+      console.log(`[AI Analysis] Blood report updated with AI insights`);
+    }
+
+    return aiResponse;
+  } catch (error) {
+    console.error(`[AI Analysis] Error processing report ${bloodReportId}:`, error.message);
+    throw error;
   }
 };
 
@@ -218,7 +265,7 @@ const getBloodReports = async (req, res, next) => {
 };
 
 /**
- * Get single blood report
+ * Get single blood report with AI analysis
  */
 const getBloodReport = async (req, res, next) => {
   try {
@@ -229,7 +276,20 @@ const getBloodReport = async (req, res, next) => {
       return res.sendError("Blood report not found", 404);
     }
 
-    res.sendSuccess(bloodReport);
+    // Parse AI analysis if available
+    let analysis = null;
+    if (bloodReport.actionPlan) {
+      try {
+        analysis = JSON.parse(bloodReport.actionPlan);
+      } catch (e) {
+        console.error("Failed to parse AI analysis:", e.message);
+      }
+    }
+
+    res.sendSuccess({
+      ...bloodReport.toObject(),
+      aiAnalysis: analysis,
+    });
   } catch (error) {
     next(error);
   }
