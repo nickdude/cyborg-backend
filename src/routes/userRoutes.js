@@ -47,6 +47,18 @@ router.post(
 );
 
 // ============== BLOOD REPORTS ==============
+// Handle preflight requests for file upload
+router.options(
+  "/:userId/blood-reports",
+  (req, res) => {
+    res.header("Access-Control-Allow-Origin", req.get("origin") || "*");
+    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+    res.header("Access-Control-Allow-Credentials", "true");
+    res.sendStatus(200);
+  }
+);
+
 router.post(
   "/:userId/blood-reports",
   verifyToken,
