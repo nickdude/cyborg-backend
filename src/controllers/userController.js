@@ -4,6 +4,7 @@ const BloodReport = require("../models/BloodReport");
 const ReferralSource = require("../models/ReferralSource");
 const axios = require("axios");
 const { analyzeBloodReport, prepareAIAnalysisData } = require("../utils/bloodReportAI");
+const actionPlanController = require("./actionPlanController");
 
 // ============== ONBOARDING ==============
 
@@ -328,39 +329,18 @@ const generateActionPlan = async (req, res, next) => {
   try {
     const { reportId } = req.params;
 
-    const bloodReport = await BloodReport.findById(reportId);
-    if (!bloodReport) {
-      return res.sendError("Blood report not found", 404);
-    }
+    // Delegate to central action plan creation flow to ensure consistent behavior,
+    // async processing, and proper fallbacks (mock/fallback plan) instead of
+    // calling an external AI endpoint synchronously here.
+    const fakeReq = {
+      body: { reportId },
+      user: req.user,
+    };
 
-    // Call AI API to generate action plan
-    // Replace with your actual AI API endpoint
-    const aiResponse = await axios.post(
-      process.env.AI_API_URL || "https://api.example.com/generate-action-plan",
-      {
-        reportPath: bloodReport.filePath,
-        userId: bloodReport.userId,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.AI_API_KEY}`,
-        },
-      }
-    );
-
-    const actionPlan = aiResponse.data.actionPlan;
-
-    // Save action plan
-    bloodReport.actionPlan = actionPlan;
-    bloodReport.actionPlanGeneratedAt = new Date();
-    await bloodReport.save();
-
-    res.sendSuccess(
-      { reportId, actionPlan },
-      "Action plan generated successfully"
-    );
+    // Reuse createActionPlan which enqueues processing and returns 202/ready responses
+    return actionPlanController.createActionPlan(fakeReq, res, next);
   } catch (error) {
-    console.error("AI API error:", error.message);
+    console.error("Action plan delegation error:", error.message);
     next(error);
   }
 };

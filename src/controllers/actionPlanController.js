@@ -240,44 +240,45 @@ const createActionPlan = async (req, res, next) => {
       return res.sendError("Blood report not found", 404);
     }
 
-    const existing = await ActionPlan.findOne({ reportId });
-    if (existing && existing.status === "pending") {
-      return res.sendSuccess(
-        { planId: existing._id, status: existing.status },
-        "Action plan generation already in progress",
-        202
-      );
+    const answers = await OnboardingAnswer.findOne({ userId });
+    const questionnaire = await Questionnaire.findOne({});
+     
+    if (!questionnaire) {
+      return res.sendError("Active questionnaire not found", 500);
     }
 
-    if (existing && existing.status === "ready") {
-      return res.sendSuccess(
-        {
-          planId: existing._id,
-          status: existing.status,
-          planJson: existing.planJson,
-          readyAt: existing.readyAt,
+    // Create new action plan entry
+    const aiResponse = await axios.post(
+      `${process.env.AI_API_URL}/report/jobs/mongo-ids`,
+      {
+        blood_report_id: reportId,
+        questionnaire_id: questionnaire ? questionnaire._id : null,
+        onboarding_answers_id: answers ? answers._id : null,
+      },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-KEY": "local-dev-key",
         },
-        "Action plan already generated"
-      );
-    }
+        timeout: 60000,
+      }
+    );
 
-    const plan = await ActionPlan.create({
-      userId,
-      reportId,
-      status: "pending",
-    });
-
-    report.actionPlanId = plan._id;
+    report.jobId = aiResponse.data.job_id;
     await report.save();
 
-    enqueuePlanGeneration(plan._id);
-
-    res.sendSuccess(
-      { planId: plan._id, status: plan.status },
-      "Action plan generation started",
-      202
+    return res.sendSuccess(
+      {
+        message: "Action plan generating successfully",
+        aiResponse: aiResponse.data,
+      },
+      201
     );
+  
   } catch (error) {
+    console.error("AI ERROR STATUS:", error?.response?.status);
+    console.error("AI ERROR DATA:", error?.response?.data);
+    console.error("AI ERROR HEADERS:", error?.response?.headers);
     next(error);
   }
 };

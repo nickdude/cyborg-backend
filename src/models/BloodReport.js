@@ -25,6 +25,11 @@ const bloodReportSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "ActionPlan",
     },
+    jobId: {
+      type: String,
+      default: null,
+      index: true,
+    },
     // AI-generated action plan
     actionPlan: {
       type: mongoose.Schema.Types.Mixed, // Will store the AI-generated action plan
