@@ -280,7 +280,7 @@ const getBloodReport = async (req, res, next) => {
     let analysis = null;
     if (bloodReport.actionPlan) {
       try {
-        analysis = JSON.parse(bloodReport.actionPlan);
+        analysis = bloodReport.actionPlan;
       } catch (e) {
         console.error("Failed to parse AI analysis:", e.message);
       }

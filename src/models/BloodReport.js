@@ -27,7 +27,7 @@ const bloodReportSchema = new mongoose.Schema(
     },
     // AI-generated action plan
     actionPlan: {
-      type: String, // Will store the AI-generated action plan
+      type: mongoose.Schema.Types.Mixed, // Will store the AI-generated action plan
     },
     actionPlanGeneratedAt: Date,
   },
