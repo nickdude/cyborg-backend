@@ -19,6 +19,24 @@ const actionPlanSchema = new mongoose.Schema(
     },
     readyAt: Date,
     failedAt: Date,
+    
+    // Real AI API tracking fields
+    externalJobId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+    jobStatus: {
+      type: String,
+      enum: ["submitting", "processing", "completed", "failed"],
+      default: null,
+    },
+    jobUpdatedAt: Date,
+    retryCount: {
+      type: Number,
+      default: 0,
+    },
+    lastRetryAt: Date,
   },
   { timestamps: true }
 );
