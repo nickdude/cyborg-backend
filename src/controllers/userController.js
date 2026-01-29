@@ -187,9 +187,9 @@ const uploadBloodReport = async (req, res, next) => {
     await user.save();
 
     // Prepare and send data to AI for analysis (async, don't wait)
-    processBloodReportWithAI(userId, bloodReport._id).catch((error) => {
-      console.error("AI analysis failed:", error.message);
-    });
+    // processBloodReportWithAI(userId, bloodReport._id).catch((error) => {
+    //   console.error("AI analysis failed:", error.message);
+    // });
 
     res.sendSuccess(
       {
