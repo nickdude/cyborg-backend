@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const userController = require("../controllers/userController");
+const reportController = require("../controllers/reportController");
 const { verifyToken, checkRole } = require("../middlewares/authMiddleware");
 const upload = require("../config/multer");
 
@@ -46,59 +47,58 @@ router.post(
   userController.markWelcomeSeen
 );
 
-// ============== BLOOD REPORTS ==============
-// Handle preflight requests for file upload
-router.options(
-  "/:userId/blood-reports",
-  (req, res) => {
-    res.header("Access-Control-Allow-Origin", req.get("origin") || "*");
-    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-    res.header("Access-Control-Allow-Credentials", "true");
-    res.sendStatus(200);
-  }
+// ============== BLOOD REPORTS (ReportData + Vision Parsing) ==============
+// Specific routes BEFORE :reportId param route to avoid matching "biomarkers" etc. as an ID
+router.get(
+  "/blood-reports/biomarkers",
+  verifyToken,
+  reportController.getBiomarkers
 );
 
+router.get(
+  "/blood-reports/biomarker-panel",
+  verifyToken,
+  reportController.getBiomarkerPanel
+);
+
+router.get(
+  "/blood-reports/timeline/:canonicalName",
+  verifyToken,
+  reportController.getBiomarkerTimeline
+);
+
+// Param-based routes after the specific ones
 router.post(
   "/:userId/blood-reports",
   verifyToken,
   checkRole(["user"]),
   upload.single("file"),
-  userController.uploadBloodReport
+  reportController.uploadReport
 );
 
 router.get(
   "/:userId/blood-reports",
   verifyToken,
-  userController.getBloodReports
+  reportController.listReports
 );
 
 router.get(
   "/blood-reports/:reportId",
   verifyToken,
-  userController.getBloodReport
+  reportController.getReport
+);
+
+router.patch(
+  "/blood-reports/:reportId",
+  verifyToken,
+  reportController.updateReport
 );
 
 router.delete(
   "/:userId/blood-reports/:reportId",
   verifyToken,
   checkRole(["user"]),
-  userController.deleteBloodReport
-);
-
-// ============== ACTION PLAN ==============
-router.post(
-  "/blood-reports/:reportId/generate-action-plan",
-  verifyToken,
-  checkRole(["user"]),
-  userController.generateActionPlan
-);
-
-router.get(
-  "/blood-reports/:reportId/action-plan",
-  verifyToken,
-  checkRole(["user"]),
-  userController.getActionPlan
+  reportController.deleteReport
 );
 
 module.exports = router;

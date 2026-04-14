@@ -1,10 +1,6 @@
 const User = require("../models/User");
 const OnboardingAnswer = require("../models/OnboardingAnswer");
-const BloodReport = require("../models/BloodReport");
 const ReferralSource = require("../models/ReferralSource");
-const axios = require("axios");
-const { analyzeBloodReport, prepareAIAnalysisData } = require("../utils/bloodReportAI");
-const actionPlanController = require("./actionPlanController");
 
 // ============== ONBOARDING ==============
 
@@ -154,227 +150,6 @@ const getOnboardingAnswers = async (req, res, next) => {
   }
 };
 
-// ============== BLOOD REPORT ==============
-
-/**
- * Upload blood report
- */
-const uploadBloodReport = async (req, res, next) => {
-  try {
-    const { userId } = req.params;
-
-    if (!req.file) {
-      return res.sendError("No file provided", 400);
-    }
-
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.sendError("User not found", 404);
-    }
-
-    // Create blood report
-    const bloodReport = new BloodReport({
-      userId,
-      fileName: req.file.originalname,
-      filePath: `/uploads/blood-reports/${req.file.filename}`,
-      fileSize: req.file.size,
-      mimeType: req.file.mimetype,
-    });
-
-    await bloodReport.save();
-
-    // Add to user's blood reports
-    user.bloodReports.push(bloodReport._id);
-    await user.save();
-
-    // Prepare and send data to AI for analysis (async, don't wait)
-    // processBloodReportWithAI(userId, bloodReport._id).catch((error) => {
-    //   console.error("AI analysis failed:", error.message);
-    // });
-
-    res.sendSuccess(
-      {
-        reportId: bloodReport._id,
-        fileName: bloodReport.fileName,
-        uploadedAt: bloodReport.uploadedAt,
-      },
-      "Blood report uploaded successfully",
-      201
-    );
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Process blood report with AI analysis (background task)
- */
-const processBloodReportWithAI = async (userId, bloodReportId) => {
-  try {
-    console.log(`[AI Analysis] Starting analysis for report ${bloodReportId}`);
-
-    // Prepare all required data
-    const analysisData = await prepareAIAnalysisData(userId, bloodReportId);
-
-    console.log(`[AI Analysis] Data prepared:`, {
-      questionnaireId: analysisData.questionnaireId,
-      userId: analysisData.userId,
-      bloodReportId: analysisData.bloodReportId,
-      answersCount: Object.keys(analysisData.onboardingAnswers).length,
-    });
-
-    // Send to AI for analysis
-    const aiResponse = await analyzeBloodReport(analysisData);
-
-    console.log(`[AI Analysis] Analysis completed:`, {
-      reportId: aiResponse.reportId,
-      confidence: aiResponse.aiMetadata.confidence,
-      findingsCount: aiResponse.insights.keyFindings.length,
-    });
-
-    // Update blood report with AI analysis
-    const bloodReport = await BloodReport.findById(bloodReportId);
-    if (bloodReport) {
-      bloodReport.actionPlan = JSON.stringify(aiResponse);
-      await bloodReport.save();
-      console.log(`[AI Analysis] Blood report updated with AI insights`);
-    }
-
-    return aiResponse;
-  } catch (error) {
-    console.error(`[AI Analysis] Error processing report ${bloodReportId}:`, error.message);
-    throw error;
-  }
-};
-
-/**
- * Get blood reports list
- */
-const getBloodReports = async (req, res, next) => {
-  try {
-    const { userId } = req.params;
-
-    const user = await User.findById(userId).populate("bloodReports");
-    if (!user) {
-      return res.sendError("User not found", 404);
-    }
-
-    res.sendSuccess(user.bloodReports);
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Get single blood report with AI analysis
- */
-const getBloodReport = async (req, res, next) => {
-  try {
-    const { reportId } = req.params;
-
-    const bloodReport = await BloodReport.findById(reportId);
-    if (!bloodReport) {
-      return res.sendError("Blood report not found", 404);
-    }
-
-    // Parse AI analysis if available
-    let analysis = null;
-    if (bloodReport.actionPlan) {
-      try {
-        analysis = bloodReport.actionPlan;
-      } catch (e) {
-        console.error("Failed to parse AI analysis:", e.message);
-      }
-    }
-
-    res.sendSuccess({
-      ...bloodReport.toObject(),
-      aiAnalysis: analysis,
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
-/**
- * Delete blood report
- */
-const deleteBloodReport = async (req, res, next) => {
-  try {
-    const { reportId, userId } = req.params;
-
-    const bloodReport = await BloodReport.findByIdAndDelete(reportId);
-    if (!bloodReport) {
-      return res.sendError("Blood report not found", 404);
-    }
-
-    // Remove from user's blood reports
-    await User.findByIdAndUpdate(userId, {
-      $pull: { bloodReports: reportId },
-    });
-
-    res.sendSuccess(null, "Blood report deleted successfully");
-  } catch (error) {
-    next(error);
-  }
-};
-
-// ============== ACTION PLAN (AI Integration) ==============
-
-/**
- * Generate action plan from blood report
- * Calls AI API
- */
-const generateActionPlan = async (req, res, next) => {
-  try {
-    const { reportId } = req.params;
-
-    // Delegate to central action plan creation flow to ensure consistent behavior,
-    // async processing, and proper fallbacks (mock/fallback plan) instead of
-    // calling an external AI endpoint synchronously here.
-    const fakeReq = {
-      body: { reportId },
-      user: req.user,
-    };
-
-    // Reuse createActionPlan which enqueues processing and returns 202/ready responses
-    return actionPlanController.createActionPlan(fakeReq, res, next);
-  } catch (error) {
-    console.error("Action plan delegation error:", error.message);
-    next(error);
-  }
-};
-
-/**
- * Get action plan for a report
- */
-const getActionPlan = async (req, res, next) => {
-  try {
-    const { reportId } = req.params;
-
-    const bloodReport = await BloodReport.findById(reportId);
-    if (!bloodReport) {
-      return res.sendError("Blood report not found", 404);
-    }
-
-    if (!bloodReport.actionPlan) {
-      return res.sendSuccess(
-        null,
-        "Action plan not yet generated",
-        200
-      );
-    }
-
-    res.sendSuccess({
-      reportId,
-      actionPlan: bloodReport.actionPlan,
-      generatedAt: bloodReport.actionPlanGeneratedAt,
-    });
-  } catch (error) {
-    next(error);
-  }
-};
-
 // ============== USER PROFILE ==============
 
 /**
@@ -385,8 +160,7 @@ const getUserProfile = async (req, res, next) => {
     const { userId } = req.params;
 
     const user = await User.findById(userId)
-      .populate("onboardingAnswers")
-      .populate("bloodReports");
+      .populate("onboardingAnswers");
 
     if (!user) {
       return res.sendError("User not found", 404);
@@ -512,12 +286,6 @@ const getAllUsers = async (req, res, next) => {
 module.exports = {
   saveOnboardingAnswers,
   getOnboardingAnswers,
-  uploadBloodReport,
-  getBloodReports,
-  getBloodReport,
-  deleteBloodReport,
-  generateActionPlan,
-  getActionPlan,
   getUserProfile,
   updateUserProfile,
   saveReferralSource,
