@@ -26,14 +26,15 @@ const fileFilter = (req, file, cb) => {
     "image/jpeg",
     "image/png",
     "image/jpg",
+    "image/webp",
   ];
-  const allowedExtensions = [".pdf", ".jpg", ".jpeg", ".png"];
+  const allowedExtensions = [".pdf", ".jpg", ".jpeg", ".png", ".webp"];
 
   const ext = path.extname(file.originalname).toLowerCase();
   if (allowedMimes.includes(file.mimetype) && allowedExtensions.includes(ext)) {
     cb(null, true);
   } else {
-    cb(new Error("Only PDF and image files (JPG, PNG) are allowed"), false);
+    cb(new Error("Only PDF and image files (JPG, PNG, WEBP) are allowed"), false);
   }
 };
 
@@ -41,7 +42,7 @@ const upload = multer({
   storage,
   fileFilter,
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
+    fileSize: 20 * 1024 * 1024, // 20MB limit
   },
 });
 

@@ -6,12 +6,12 @@ const errorHandler = require("./middlewares/errorHandler");
 const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
-const actionPlanRoutes = require("./routes/actionPlanRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
-const chatRoutes = require("./routes/chatRoutes");
 const questionnaireRoutes = require("./routes/questionnaireRoutes");
-const conciergeRoutes = require("./routes/conciergeRoutes");
+const chatRoutes = require("./routes/chatRoutes");
 const doctorRoutes = require("./routes/doctorRoutes");
+const goalRoutes = require("./routes/goalRoutes");
+const agentRoutes = require("./routes/agentRoutes");
 
 const app = express();
 
@@ -42,29 +42,29 @@ app.get("/", (req, res) => {
 // Auth Routes
 app.use("/api/auth", authRoutes);
 
-// User Routes
+// User Routes (includes blood report endpoints)
 app.use("/api/users", userRoutes);
 
 // Payment Routes
 app.use("/api/payments", paymentRoutes);
 
-// Action Plan Routes
-app.use("/api/action-plans", actionPlanRoutes);
-
 // Notification Routes
 app.use("/api/notifications", notificationRoutes);
-
-// Chat Routes
-app.use("/api/chat", chatRoutes);
 
 // Questionnaire Routes
 app.use("/api/questionnaire", questionnaireRoutes);
 
-// Concierge Routes
-app.use("/api/concierge", conciergeRoutes);
+// Chat Routes (agentic AI with SSE streaming)
+app.use("/api/chats", chatRoutes);
 
-// Doctor Routes
+// Doctor Routes (clinical AI assistant)
 app.use("/api/doctor", doctorRoutes);
+
+// Goal Routes
+app.use("/api/goals", goalRoutes);
+
+// Agent Routes (server-to-server)
+app.use("/api/agent", agentRoutes);
 
 // 404 handler
 app.use((req, res) => {
