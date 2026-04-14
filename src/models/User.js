@@ -107,6 +107,10 @@ const userSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: "OnboardingAnswer",
     },
+    onboardingData: {
+      type: mongoose.Schema.Types.Mixed,
+      default: {},
+    },
 
     // Welcome Screen
     hasSeenWelcome: {
@@ -115,24 +119,21 @@ const userSchema = new mongoose.Schema(
     },
 
     // Blood Report
+    bloodReport: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "ReportData",
+      default: null,
+    },
     bloodReports: [
       {
         type: mongoose.Schema.Types.ObjectId,
-        ref: "BloodReport",
+        ref: "ReportData",
       },
     ],
 
     // Profile
     profilePicture: String,
     bio: String,
-    firstName: {
-      type: String,
-      trim: true,
-    },
-    lastName: {
-      type: String,
-      trim: true,
-    },
     biologicalSex: {
       type: String,
       enum: ["Male", "Female", "Other", "Prefer not to say"],

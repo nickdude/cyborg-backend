@@ -1,0 +1,549 @@
+/**
+ * AI Provider Abstraction
+ *
+ * Exposes a unified interface for both Claude and Gemini.
+ * Controlled by AI_PROVIDER env var ("claude" | "gemini").
+ *
+ * Exports:
+ *   - getProvider()        -> "claude" | "gemini"
+ *   - getModelName()       -> current model string
+ *   - streamChat(opts)     -> agentic loop streaming (for chat.js)
+ *   - parseVision(opts)    -> vision-based extraction (for reports/agent)
+ *   - convertToolsForProvider(claudeTools) -> convert tool defs
+ */
+
+const Anthropic = require("@anthropic-ai/sdk").default || require("@anthropic-ai/sdk");
+const { GoogleGenerativeAI, FunctionCallingMode } = require("@google/generative-ai");
+
+// --- Provider detection (lazy -- env may not be loaded at import time) -------
+
+let _provider = null;
+function getProvider() {
+  if (_provider === null) {
+    _provider = (process.env.AI_PROVIDER || "claude").toLowerCase();
+    console.log(`[AI] Provider resolved: ${_provider}`);
+  }
+  return _provider;
+}
+
+function getModelName() {
+  return getProvider() === "gemini"
+    ? process.env.GEMINI_MODEL || "gemini-2.5-flash"
+    : process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
+}
+
+// --- Gemini key rotation (lazy init) ----------------------------------------
+
+let geminiKeys = null;
+let geminiKeyIndex = 0;
+
+function loadGeminiKeys() {
+  if (geminiKeys !== null) return;
+  geminiKeys = [];
+  for (let i = 1; i <= 20; i++) {
+    const key = process.env[`GEMINI_API_KEY_${i}`];
+    if (key) geminiKeys.push(key);
+  }
+  console.log(`[AI] Loaded ${geminiKeys.length} Gemini API keys`);
+}
+
+function getNextGeminiKey() {
+  loadGeminiKeys();
+  if (geminiKeys.length === 0) throw new Error("No GEMINI_API_KEY_* found in .env");
+  const key = geminiKeys[geminiKeyIndex % geminiKeys.length];
+  geminiKeyIndex++;
+  return key;
+}
+
+function getGeminiClient() {
+  return new GoogleGenerativeAI(getNextGeminiKey());
+}
+
+// --- Retry helpers ----------------------------------------------------------
+
+const OVERLOAD_DELAYS_MS = [1000, 2000, 4000]; // ~7s total max wait
+
+function isOverloadedError(err) {
+  if (err?.status === 529 || err?.statusCode === 529) return true;
+  if (err?.error?.type === "overloaded_error") return true;
+  return (err?.message || "").toLowerCase().includes("overloaded");
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// --- Claude client ----------------------------------------------------------
+
+let _anthropic;
+function getAnthropicClient() {
+  if (!_anthropic) _anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  return _anthropic;
+}
+
+// --- Tool format conversion -------------------------------------------------
+
+/**
+ * Convert Claude tool definitions to Gemini function declarations.
+ * Claude format:  { name, description, input_schema: { type, properties, required } }
+ * Gemini format:  { name, description, parameters: { type, properties, required } }
+ */
+function convertToolsForGemini(claudeTools) {
+  return claudeTools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    parameters: sanitizeSchemaForGemini(tool.input_schema),
+  }));
+}
+
+/**
+ * Gemini doesn't support a top-level 'default' or certain JSON Schema keywords.
+ * Recursively clean the schema for Gemini compatibility.
+ */
+function sanitizeSchemaForGemini(schema) {
+  if (!schema || typeof schema !== "object") return schema;
+  const cleaned = {};
+  for (const [key, val] of Object.entries(schema)) {
+    if (key === "default") continue; // Gemini rejects 'default'
+    if (typeof val === "object" && val !== null && !Array.isArray(val)) {
+      cleaned[key] = sanitizeSchemaForGemini(val);
+    } else if (Array.isArray(val)) {
+      cleaned[key] = val.map((v) =>
+        typeof v === "object" && v !== null ? sanitizeSchemaForGemini(v) : v
+      );
+    } else {
+      cleaned[key] = val;
+    }
+  }
+  return cleaned;
+}
+
+// --- Chat Streaming ---------------------------------------------------------
+
+/**
+ * Run the agentic chat loop.
+ *
+ * @param {Object} opts
+ * @param {Array}  opts.messages        - Conversation in Claude format [{role, content}]
+ * @param {string} opts.systemPrompt    - System prompt string
+ * @param {Array}  opts.tools           - Claude-format tool definitions
+ * @param {Function} opts.executeTool   - async (name, input) => result
+ * @param {Function} opts.emit          - SSE emitter (data) => void
+ * @param {boolean}  opts.enableThinking
+ * @param {number}   opts.thinkingBudget
+ * @returns {{ text, toolUses, thinking }}
+ */
+async function streamChat(opts) {
+  return getProvider() === "gemini"
+    ? streamChatGemini(opts)
+    : streamChatClaude(opts);
+}
+
+// -- Claude implementation ---------------------------------------------------
+
+async function streamChatClaude({
+  messages, systemPrompt, tools, executeTool, emit,
+  enableThinking = false, thinkingBudget = 8000,
+}) {
+  const anthropic = getAnthropicClient();
+  const model = getModelName();
+  let currentMessages = [...messages];
+  let allToolUses = [];
+  let thinkingMap = {};   // { [toolIndex]: string } -- thinking segmented by tool slot
+  let toolCallCount = 0;  // increments after each batch of tool calls
+  let thinkingEnabled = enableThinking;
+  let iteration = 0;
+  let overloadRetries = 0;
+
+  while (true) {
+    iteration++;
+    console.log(`[Claude] -> request #${iteration} | model: ${model} | thinking: ${thinkingEnabled} | messages: ${currentMessages.length}`);
+
+    let accText = "";
+    // Current segment index: toolCallCount - 1
+    // (-1 = pre-first-tool, 0 = after tool[0], 1 = after tool[1], ...)
+    const segmentIndex = toolCallCount - 1;
+
+    try {
+      const baseParams = {
+        model,
+        max_tokens: thinkingEnabled ? Math.max(16000, thinkingBudget + 4096) : 4096,
+        system: systemPrompt,
+        tools,
+        messages: currentMessages,
+      };
+
+      const stream = thinkingEnabled
+        ? anthropic.beta.messages.stream({
+            betas: ["interleaved-thinking-2025-05-14"],
+            thinking: { type: "enabled", budget_tokens: thinkingBudget },
+            ...baseParams,
+          })
+        : anthropic.messages.stream(baseParams);
+
+      for await (const event of stream) {
+        if (event.type === "content_block_delta") {
+          if (event.delta.type === "thinking_delta") {
+            // Accumulate into the correct segment
+            thinkingMap[segmentIndex] = (thinkingMap[segmentIndex] || "") + event.delta.thinking;
+            emit({ type: "thinkingDelta", text: event.delta.thinking, toolIndex: segmentIndex });
+          } else if (event.delta.type === "text_delta") {
+            accText += event.delta.text;
+            emit({ type: "textDelta", text: event.delta.text });
+          }
+        }
+      }
+
+      const finalMsg = await stream.finalMessage();
+      console.log(`[Claude] <- response #${iteration} | stop_reason: ${finalMsg.stop_reason} | in: ${finalMsg.usage?.input_tokens} | out: ${finalMsg.usage?.output_tokens}`);
+
+      const hasThinking = Object.keys(thinkingMap).length > 0;
+
+      if (finalMsg.stop_reason === "end_turn") {
+        emit({ type: "done", toolUses: allToolUses, thinkingMap: hasThinking ? thinkingMap : null });
+        return { text: accText, toolUses: allToolUses, thinkingMap: hasThinking ? thinkingMap : null };
+      }
+
+      if (finalMsg.stop_reason === "tool_use") {
+        const toolUseBlocks = finalMsg.content.filter((b) => b.type === "tool_use");
+        const toolResults = [];
+
+        for (const toolUse of toolUseBlocks) {
+          emit({ type: "toolStart", name: toolUse.name, input: toolUse.input });
+          const result = await executeTool(toolUse.name, toolUse.input);
+          emit({ type: "toolEnd", name: toolUse.name, ok: !result.error, result });
+          allToolUses.push({ name: toolUse.name, input: toolUse.input, result });
+          toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: JSON.stringify(result) });
+        }
+
+        // Advance toolCallCount so next iteration's thinking gets a new segment index
+        toolCallCount += toolUseBlocks.length;
+
+        currentMessages = [
+          ...currentMessages,
+          { role: "assistant", content: finalMsg.content },
+          { role: "user", content: toolResults },
+        ];
+        overloadRetries = 0;
+        continue;
+      }
+
+      emit({ type: "done", toolUses: allToolUses, thinkingMap: hasThinking ? thinkingMap : null });
+      return { text: accText, toolUses: allToolUses, thinkingMap: hasThinking ? thinkingMap : null };
+
+    } catch (err) {
+      const msg = (err?.message || "").toLowerCase();
+      const status = err?.status || err?.statusCode;
+
+      // Thinking unsupported -- disable and retry same turn
+      if (thinkingEnabled && status === 400 && (msg.includes("thinking") || msg.includes("budget_tokens") || msg.includes("interleaved"))) {
+        console.warn(`[Claude] Extended thinking not supported by model "${model}", falling back`);
+        thinkingEnabled = false;
+        emit({ type: "thinkingUnsupported" });
+        iteration--;
+        continue;
+      }
+
+      // Overloaded -- exponential backoff retry
+      if (isOverloadedError(err) && overloadRetries < OVERLOAD_DELAYS_MS.length) {
+        const delay = OVERLOAD_DELAYS_MS[overloadRetries];
+        console.warn(`[Claude] Overloaded -- retry ${overloadRetries + 1}/${OVERLOAD_DELAYS_MS.length} in ${delay}ms`);
+        await sleep(delay);
+        overloadRetries++;
+        iteration--;  // don't count this as a new logical turn
+        continue;
+      }
+
+      throw err;
+    }
+  }
+}
+
+// -- Gemini implementation ---------------------------------------------------
+
+async function streamChatGemini({
+  messages, systemPrompt, tools, executeTool, emit,
+}) {
+  const genAI = getGeminiClient();
+  const model = getModelName();
+  let allToolUses = [];
+  let iteration = 0;
+
+  // Convert tools to Gemini format
+  const geminiTools = [{
+    functionDeclarations: convertToolsForGemini(tools),
+  }];
+
+  // Build Gemini chat history from Claude-format messages
+  // Claude: [{role: 'user'|'assistant', content: string}]
+  // Gemini: [{role: 'user'|'model', parts: [{text}]}]
+  const history = [];
+  for (const msg of messages.slice(0, -1)) {
+    history.push({
+      role: msg.role === "assistant" ? "model" : "user",
+      parts: [{ text: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content) }],
+    });
+  }
+
+  const lastUserMsg = messages[messages.length - 1];
+  const userText = typeof lastUserMsg.content === "string"
+    ? lastUserMsg.content
+    : JSON.stringify(lastUserMsg.content);
+
+  const genModel = genAI.getGenerativeModel({
+    model,
+    systemInstruction: systemPrompt,
+    tools: geminiTools,
+    toolConfig: { functionCallingConfig: { mode: FunctionCallingMode.AUTO } },
+  });
+
+  const chat = genModel.startChat({ history });
+
+  // Agentic loop -- keep calling until no more tool calls
+  let currentInput = userText;
+
+  while (true) {
+    iteration++;
+    console.log(`[Gemini] -> request #${iteration} | model: ${model} | messages: ${messages.length}`);
+
+    const result = await chat.sendMessageStream(currentInput);
+
+    let accText = "";
+    let pendingFunctionCalls = [];
+
+    for await (const chunk of result.stream) {
+      const parts = chunk.candidates?.[0]?.content?.parts || [];
+      for (const part of parts) {
+        if (part.text) {
+          accText += part.text;
+          emit({ type: "textDelta", text: part.text });
+        }
+        if (part.functionCall) {
+          pendingFunctionCalls.push(part.functionCall);
+        }
+      }
+    }
+
+    // If no function calls, we're done
+    if (pendingFunctionCalls.length === 0) {
+      emit({ type: "done", toolUses: allToolUses, thinkingMap: null });
+      return { text: accText, toolUses: allToolUses, thinkingMap: null };
+    }
+
+    // Execute tool calls
+    const functionResponses = [];
+    for (const fc of pendingFunctionCalls) {
+      console.log(`[Gemini] tool_call: ${fc.name} | input: ${JSON.stringify(fc.args)}`);
+      emit({ type: "toolStart", name: fc.name, input: fc.args });
+
+      const result = await executeTool(fc.name, fc.args || {});
+
+      console.log(`[Gemini] tool_result: ${fc.name} | ok: ${!result.error}`);
+      emit({ type: "toolEnd", name: fc.name, ok: !result.error, result });
+
+      allToolUses.push({ name: fc.name, input: fc.args, result });
+      functionResponses.push({
+        functionResponse: {
+          name: fc.name,
+          response: result,
+        },
+      });
+    }
+
+    // Send function responses back and continue the loop
+    currentInput = functionResponses;
+  }
+}
+
+// --- Vision / Document Parsing ----------------------------------------------
+
+/**
+ * Parse a document/image with vision.
+ *
+ * @param {Object} opts
+ * @param {Buffer} opts.buffer       - File buffer
+ * @param {string} opts.mimeType     - MIME type
+ * @param {string} opts.filename     - Filename
+ * @param {string} opts.systemPrompt - System prompt
+ * @param {string} opts.userPrompt   - User prompt text
+ * @returns {{ parsedData, usage: { input, output } }}
+ */
+async function parseVision(opts) {
+  return getProvider() === "gemini"
+    ? parseVisionGemini(opts)
+    : parseVisionClaude(opts);
+}
+
+async function parseVisionClaude({ buffer, mimeType, filename, systemPrompt, userPrompt }) {
+  const anthropic = getAnthropicClient();
+  const model = getModelName();
+
+  let content;
+  if (mimeType === "application/pdf") {
+    content = [
+      { type: "document", source: { type: "base64", media_type: "application/pdf", data: buffer.toString("base64") } },
+      { type: "text", text: userPrompt },
+    ];
+  } else {
+    content = [
+      { type: "image", source: { type: "base64", media_type: mimeType, data: buffer.toString("base64") } },
+      { type: "text", text: userPrompt },
+    ];
+  }
+
+  console.log(`[Claude Vision] -> model: ${model} | type: ${mimeType} | file: ${filename}`);
+
+  const response = await anthropic.messages.create({
+    model,
+    max_tokens: 8192,
+    system: systemPrompt,
+    messages: [{ role: "user", content }],
+  });
+
+  const stopReason = response.stop_reason;
+  console.log(`[Claude Vision] <- stop: ${stopReason} | in: ${response.usage?.input_tokens} | out: ${response.usage?.output_tokens}`);
+
+  if (stopReason === "max_tokens") {
+    console.warn("[Claude Vision] Response truncated at max_tokens -- extracted JSON will be incomplete");
+  }
+
+  const textBlock = response.content?.find((b) => b.type === "text");
+  if (!textBlock?.text) {
+    throw new Error(`Claude Vision returned no text block. stop_reason: ${stopReason}, blocks: ${response.content?.length ?? 0}`);
+  }
+
+  return {
+    text: textBlock.text,
+    truncated: stopReason === "max_tokens",
+    usage: { input: response.usage?.input_tokens || 0, output: response.usage?.output_tokens || 0 },
+  };
+}
+
+async function parseVisionGemini({ buffer, mimeType, filename, systemPrompt, userPrompt }) {
+  const genAI = getGeminiClient();
+  const model = getModelName();
+
+  console.log(`[Gemini Vision] -> model: ${model} | type: ${mimeType} | file: ${filename}`);
+
+  const genModel = genAI.getGenerativeModel({
+    model,
+    systemInstruction: systemPrompt,
+  });
+
+  const parts = [
+    {
+      inlineData: {
+        mimeType,
+        data: buffer.toString("base64"),
+      },
+    },
+    { text: userPrompt },
+  ];
+
+  const result = await genModel.generateContent(parts);
+  const response = result.response;
+  const text = response.text();
+
+  const usage = response.usageMetadata || {};
+  const finishReason = response.candidates?.[0]?.finishReason;
+  console.log(`[Gemini Vision] <- finish: ${finishReason} | in: ${usage.promptTokenCount || "?"} | out: ${usage.candidatesTokenCount || "?"}`);
+
+  if (finishReason === "MAX_TOKENS") {
+    console.warn("[Gemini Vision] Response truncated at MAX_TOKENS -- extracted JSON will be incomplete");
+  }
+
+  return {
+    text,
+    truncated: finishReason === "MAX_TOKENS",
+    usage: {
+      input: usage.promptTokenCount || 0,
+      output: usage.candidatesTokenCount || 0,
+    },
+  };
+}
+
+// --- Non-streaming text generation -----------------------------------------
+
+/**
+ * Generate a text response (non-streaming, no tool use).
+ * Used for tasks that need a complete response like JSON generation.
+ *
+ * @param {Object} opts
+ * @param {string} opts.systemPrompt - System prompt
+ * @param {string} opts.userPrompt - User message
+ * @param {number} [opts.maxTokens=4096] - Max output tokens
+ * @returns {Promise<string>} The generated text
+ */
+async function generateText({ systemPrompt, userPrompt, maxTokens = 4096 }) {
+  const provider = getProvider();
+  const model = getModelName();
+
+  if (provider === "gemini") {
+    const genAI = getGeminiClient();
+    const genModel = genAI.getGenerativeModel({ model, systemInstruction: systemPrompt });
+
+    console.log(`[Gemini Text] -> model: ${model}`);
+    const result = await genModel.generateContent(userPrompt);
+    const text = result.response.text();
+    const usage = result.response.usageMetadata || {};
+    console.log(`[Gemini Text] <- in: ${usage.promptTokenCount || "?"} | out: ${usage.candidatesTokenCount || "?"}`);
+    return text;
+  }
+
+  // Claude
+  const anthropic = getAnthropicClient();
+  console.log(`[Claude Text] -> model: ${model}`);
+
+  const response = await anthropic.messages.create({
+    model,
+    max_tokens: maxTokens,
+    system: systemPrompt,
+    messages: [{ role: "user", content: userPrompt }],
+  });
+
+  const textBlock = response.content?.find((b) => b.type === "text");
+  console.log(`[Claude Text] <- stop: ${response.stop_reason} | in: ${response.usage?.input_tokens} | out: ${response.usage?.output_tokens}`);
+  return textBlock?.text || "";
+}
+
+// --- Helper: extract JSON from LLM response --------------------------------
+
+function extractJSON(text) {
+  // Try markdown code block first
+  let match = text.match(/```(?:json)?\n?([\s\S]*?)\n?```/);
+  if (match && match[1]) {
+    try {
+      return JSON.parse(match[1]);
+    } catch (e) {
+      console.warn("[extractJSON] Markdown block parse failed:", e.message);
+    }
+  }
+
+  // Try to find JSON object in the text by finding matching braces
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+
+  if (start !== -1 && end !== -1 && end > start) {
+    const jsonStr = text.slice(start, end + 1);
+    try {
+      return JSON.parse(jsonStr);
+    } catch (e) {
+      console.warn("[extractJSON] Direct JSON parse failed:", e.message);
+    }
+  }
+
+  // Fallback: try parsing the entire text
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    throw new Error(`Failed to parse LLM response as JSON. Raw: ${text.slice(0, 1000)}`);
+  }
+}
+
+module.exports = {
+  getProvider,
+  getModelName,
+  streamChat,
+  parseVision,
+  generateText,
+  convertToolsForGemini,
+  extractJSON,
+};
