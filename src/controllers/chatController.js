@@ -265,10 +265,13 @@ const sendMessage = async (req, res, next) => {
         thinking: thinkingMap || null,
       });
 
-      // 11. Auto-set title if still "New Chat"
-      if (chat.title === "New Chat" && text) {
-        chat.title = text.substring(0, 60).replace(/\n/g, " ").trim();
-        if (chat.title.length === 60) chat.title += "\u2026";
+      // 11. Auto-set title from user's first message
+      if (chat.title === "New Chat" && chat.messages.length <= 2) {
+        const userMsg = req.body.message || "";
+        if (userMsg) {
+          chat.title = userMsg.slice(0, 60).replace(/\n/g, " ").trim();
+          if (chat.title.length === 60) chat.title += "\u2026";
+        }
       }
 
       await chat.save();

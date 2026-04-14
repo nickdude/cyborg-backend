@@ -264,12 +264,11 @@ const sendDoctorMessage = async (req, res, next) => {
     const patientContext = await getPatientContext(patientId);
 
     // Set up SSE response headers
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    });
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders();
 
     const emit = (data) => {
       if (!res.writableEnded) {
@@ -316,6 +315,7 @@ const sendDoctorMessage = async (req, res, next) => {
       return next(error);
     }
     console.error("[doctor] Pre-stream error after headers sent:", error);
+    if (!res.writableEnded) res.end();
   }
 };
 

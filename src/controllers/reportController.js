@@ -35,9 +35,20 @@ const uploadReport = async (req, res, next) => {
       return res.sendError("No file provided", 400);
     }
 
+    // Validate MIME type
+    const ALLOWED_MIMES = ["application/pdf", "image/jpeg", "image/png", "image/jpg", "image/webp"];
+    if (!ALLOWED_MIMES.includes(req.file.mimetype)) {
+      // Clean up temp file
+      try { fs.unlinkSync(req.file.path); } catch (_) {}
+      return res.sendError("Only PDF and image files (JPG, PNG, WEBP) are allowed", 400);
+    }
+
     const buffer = fs.readFileSync(req.file.path);
     const filename = req.file.originalname;
     const mimeType = req.file.mimetype;
+
+    // Clean up temp file after reading into memory
+    try { fs.unlinkSync(req.file.path); } catch (_) {}
 
     // Parse with vision AI
     const { text, usage } = await parseVision({
@@ -84,7 +95,7 @@ const uploadReport = async (req, res, next) => {
     // Create report document
     const reportData = await ReportData.create({
       userId: req.user.id,
-      sourceUrl: req.file.path,
+      sourceUrl: `upload://${filename}`,
       filename,
       parsedData,
       reportDate,
