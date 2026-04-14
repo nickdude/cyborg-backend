@@ -1,8 +1,7 @@
-const { User } = require("../models/User")
-const { Chat } = require("../models/Chat")
-const { Report } = require("../models/Report")
-const { ReportData } = require("../models/ReportData")
-const { SchemaInfo } = require("../models/SchemaInfo")
+const User = require("../models/User")
+const Chat = require("../models/Chat")
+const ReportData = require("../models/ReportData")
+const SchemaInfo = require("../models/SchemaInfo")
 
 // Fields that must never appear in schema metadata returned to the agent
 const SENSITIVE_FIELDS = new Set(['password', 'passwordHash', 'passwordSalt', 'token', 'secret'])
@@ -10,8 +9,7 @@ const SENSITIVE_FIELDS = new Set(['password', 'passwordHash', 'passwordSalt', 't
 const COLLECTION_DESCRIPTIONS = {
   User: 'Stores user account info and onboarding data. Each user has health preferences, conditions, and medications.',
   Chat: 'Stores conversation history. Each chat has role (user/assistant), content, tool calls, and thinking tokens.',
-    Report: 'Legacy report collection (being replaced by ReportData).',
-    ReportData: 'Stores parsed medical reports from the vision-based PDF parser agent. Contains structured JSON with patient info, lab tests, diagnoses, panels, and metadata.',
+  ReportData: 'Stores parsed medical reports from the vision-based PDF parser agent. Contains structured JSON with patient info, lab tests, diagnoses, panels, and metadata.',
 }
 
 function mongooseTypeToString(pathType) {
@@ -50,15 +48,7 @@ function getFieldDescription(collection, field) {
       createdAt: 'Chat creation timestamp',
       updatedAt: 'Last message timestamp',
     },
-    Report: {
-      _id: 'Report identifier',
-      userId: 'Reference to User._id who uploaded it',
-      filename: 'Original uploaded filename',
-      mimeType: 'File type (application/pdf, image/jpeg, etc)',
-      parsedData: 'Extracted structured data: {patient, date, lab, tests[], diagnoses[], notes}',
-      rawText: 'Raw extracted text from PDF/image',
-      uploadedAt: 'Upload timestamp',
-      }, ReportData: {
+    ReportData: {
           _id: 'Report data identifier',
           userId: 'Reference to User._id',
           sourceUrl: 'Original file URL (S3 or local path)',
@@ -121,8 +111,7 @@ async function buildDatabaseSchema() {
   const models = [
     { model: User, name: 'User' },
     { model: Chat, name: 'Chat' },
-    { model: Report, name: 'Report' },
-      { model: ReportData, name: 'ReportData' },
+    { model: ReportData, name: 'ReportData' },
   ]
 
   const schemas = []
