@@ -237,8 +237,9 @@ const sendMessage = async (req, res, next) => {
       }
     };
 
-    // 8. Determine thinking settings
-    const enableThinking = process.env.ENABLE_THINKING === "true";
+    // 8. Determine thinking settings (thinking only supported for Claude)
+    const { getProvider } = require("../providers/ai");
+    const enableThinking = process.env.ENABLE_THINKING === "true" && getProvider() === "claude";
     const thinkingBudget = parseInt(process.env.THINKING_BUDGET_TOKENS || "8000", 10);
 
     try {

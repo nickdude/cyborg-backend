@@ -347,11 +347,15 @@ const updateDoctorChat = async (req, res, next) => {
  */
 const deleteDoctorChat = async (req, res, next) => {
   try {
-    await Chat.deleteOne({
+    const chat = await Chat.findOneAndDelete({
       _id: req.params.id,
       userId: req.user.id,
       chatType: "doctor",
     });
+
+    if (!chat) {
+      return res.sendError("Doctor chat not found", 404);
+    }
 
     res.sendSuccess(null, "Doctor chat deleted successfully");
   } catch (error) {
