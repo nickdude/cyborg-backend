@@ -604,6 +604,7 @@ function extractJSON(text) {
 }
 
 module.exports = {
+  getAnthropicClient,
   getProvider,
   getModelName,
   streamChat,

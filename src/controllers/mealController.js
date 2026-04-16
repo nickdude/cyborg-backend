@@ -5,7 +5,7 @@ const mongoose = require("mongoose");
 const Meal = require("../models/Meal");
 const mealStorage = require("../utils/mealStorage");
 const { mealParserSystemPrompt } = require("../prompts/mealParser");
-const { parseVision, extractJSON, getModelName } = require("../providers/ai");
+const { parseVision, extractJSON, getModelName, getAnthropicClient } = require("../providers/ai");
 
 const MEAL_ANALYZE_MAX_TOKENS =
   Number(process.env.CLAUDE_MEAL_MAX_TOKENS) || 8192;
@@ -73,11 +73,6 @@ const analyzeMeal = async (req, res, next) => {
       }
     }
 
-    // Build the vision content blocks: one per image + the user prompt text.
-    const imageContents = files.map((f) => ({
-      type: "image",
-      source: { type: "base64", media_type: f.mimetype, data: f.buffer.toString("base64") },
-    }));
     const userPrompt = buildUserPrompt(description, files.length);
 
     let result;
@@ -88,6 +83,11 @@ const analyzeMeal = async (req, res, next) => {
       // parseVision and talk to the Anthropic streaming API ourselves —
       // same pattern (stream().finalMessage()), just different content.
       if (files.length > 1) {
+        // Build the vision content blocks only when we need them (multi-image path).
+        const imageContents = files.map((f) => ({
+          type: "image",
+          source: { type: "base64", media_type: f.mimetype, data: f.buffer.toString("base64") },
+        }));
         result = await parseVisionMultiImage({
           imageContents,
           description,
@@ -162,10 +162,8 @@ function f_safeName(file) {
 // straight to the Anthropic SDK's streaming messages API, matching the
 // pattern already used in providers/ai.js.
 async function parseVisionMultiImage({ imageContents, description, maxTokens }) {
-  const Anthropic =
-    require("@anthropic-ai/sdk").default || require("@anthropic-ai/sdk");
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const model = process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
+  const client = getAnthropicClient();
+  const model = getModelName();
   const userPrompt = buildUserPrompt(description, imageContents.length);
 
   const stream = client.messages.stream({
@@ -193,10 +191,8 @@ async function parseVisionMultiImage({ imageContents, description, maxTokens }) 
 
 // Text-only call: no images at all. Same streaming path.
 async function parseVisionTextOnly({ description, maxTokens }) {
-  const Anthropic =
-    require("@anthropic-ai/sdk").default || require("@anthropic-ai/sdk");
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const model = process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
+  const client = getAnthropicClient();
+  const model = getModelName();
   const userPrompt = buildUserPrompt(description, 0);
 
   const stream = client.messages.stream({
