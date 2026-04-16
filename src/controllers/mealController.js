@@ -294,4 +294,85 @@ const commitMeal = async (req, res, next) => {
   }
 };
 
-module.exports = { analyzeMeal, commitMeal };
+// Parse a ?date=YYYY-MM-DD query param into the UTC day bounds.
+// Returns null on invalid format.
+function utcDayBounds(dateStr) {
+  if (!dateStr || !/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return null;
+  const start = new Date(`${dateStr}T00:00:00.000Z`);
+  if (isNaN(start.getTime())) return null;
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+  return { start, end };
+}
+
+/**
+ * GET /api/users/:userId/meals?date=YYYY-MM-DD
+ * Returns meals whose consumedAt falls within the UTC day, newest first.
+ */
+const listMeals = async (req, res, next) => {
+  try {
+    const bounds = utcDayBounds(req.query.date);
+    if (!bounds) {
+      return res.sendError("date must be YYYY-MM-DD", 400);
+    }
+    const meals = await Meal.find({
+      userId: req.user.id,
+      consumedAt: { $gte: bounds.start, $lt: bounds.end },
+    })
+      .sort({ consumedAt: -1, createdAt: -1 })
+      .lean();
+    return res.sendSuccess(meals, "Meals retrieved");
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * GET /api/users/:userId/meals/summary?date=YYYY-MM-DD
+ * Aggregates totals and item count across all meals for that day.
+ */
+const getMealSummary = async (req, res, next) => {
+  try {
+    const bounds = utcDayBounds(req.query.date);
+    if (!bounds) {
+      return res.sendError("date must be YYYY-MM-DD", 400);
+    }
+    const userObjectId = new mongoose.Types.ObjectId(req.user.id);
+    const agg = await Meal.aggregate([
+      {
+        $match: {
+          userId: userObjectId,
+          consumedAt: { $gte: bounds.start, $lt: bounds.end },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          calories: { $sum: "$totals.calories" },
+          proteinG: { $sum: "$totals.proteinG" },
+          carbsG: { $sum: "$totals.carbsG" },
+          fatG: { $sum: "$totals.fatG" },
+          fiberG: { $sum: "$totals.fiberG" },
+          sugarG: { $sum: "$totals.sugarG" },
+          itemCount: { $sum: { $size: { $ifNull: ["$items", []] } } },
+        },
+      },
+    ]);
+
+    const totals = agg[0] || {
+      calories: 0,
+      proteinG: 0,
+      carbsG: 0,
+      fatG: 0,
+      fiberG: 0,
+      sugarG: 0,
+      itemCount: 0,
+    };
+    delete totals._id;
+
+    return res.sendSuccess(totals, "Meal summary retrieved");
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = { analyzeMeal, commitMeal, listMeals, getMealSummary };
