@@ -5,6 +5,7 @@ const { responseHandler } = require("./middlewares/responseHandler");
 const errorHandler = require("./middlewares/errorHandler");
 const authRoutes = require("./routes/authRoutes");
 const userRoutes = require("./routes/userRoutes");
+const mealRoutes = require("./routes/mealRoutes");
 const paymentRoutes = require("./routes/paymentRoutes");
 const notificationRoutes = require("./routes/notificationRoutes");
 const questionnaireRoutes = require("./routes/questionnaireRoutes");
@@ -44,6 +45,7 @@ app.use("/api/auth", authRoutes);
 
 // User Routes (includes blood report endpoints)
 app.use("/api/users", userRoutes);
+app.use("/api/users", mealRoutes);
 
 // Payment Routes
 app.use("/api/payments", paymentRoutes);
