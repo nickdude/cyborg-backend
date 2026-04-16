@@ -88,6 +88,12 @@ router.get(
   reportController.getReport
 );
 
+router.get(
+  "/blood-reports/:reportId/file",
+  verifyToken,
+  reportController.getReportFile
+);
+
 router.patch(
   "/blood-reports/:reportId",
   verifyToken,

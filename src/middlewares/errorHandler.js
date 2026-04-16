@@ -33,6 +33,24 @@ const errorHandler = (err, req, res, next) => {
     message = "Cross-Origin request not allowed";
   }
 
+  // Never leak raw LLM output to the client. If an LLM_JSON_PARSE_FAILED
+  // (or a legacy "Failed to parse LLM response" message) escapes a controller,
+  // sanitize to a friendly 502 and keep the raw detail in server logs only.
+  if (
+    err.code === "LLM_JSON_PARSE_FAILED" ||
+    (typeof err.message === "string" && err.message.startsWith("Failed to parse LLM response"))
+  ) {
+    console.error("[LLM_PARSE_LEAK]", {
+      url: req.url,
+      method: req.method,
+      code: err.code || null,
+      rawLength: err.rawLength ?? null,
+      rawSnippet: err.rawSnippet ?? (typeof err.message === "string" ? err.message.slice(0, 500) : null),
+    });
+    statusCode = 502;
+    message = "We couldn't read this report. Please re-upload or try a clearer scan.";
+  }
+
   console.error("[ERROR]:", {
     message,
     statusCode,

@@ -372,9 +372,10 @@ async function parseVision(opts) {
     : parseVisionClaude(opts);
 }
 
-async function parseVisionClaude({ buffer, mimeType, filename, systemPrompt, userPrompt }) {
+async function parseVisionClaude({ buffer, mimeType, filename, systemPrompt, userPrompt, maxTokens }) {
   const anthropic = getAnthropicClient();
   const model = getModelName();
+  const outputCap = maxTokens || Number(process.env.CLAUDE_VISION_MAX_TOKENS) || 32768;
 
   let content;
   if (mimeType === "application/pdf") {
@@ -389,14 +390,19 @@ async function parseVisionClaude({ buffer, mimeType, filename, systemPrompt, use
     ];
   }
 
-  console.log(`[Claude Vision] -> model: ${model} | type: ${mimeType} | file: ${filename}`);
+  console.log(`[Claude Vision] -> model: ${model} | type: ${mimeType} | file: ${filename} | max_tokens: ${outputCap} | streaming`);
 
-  const response = await anthropic.messages.create({
+  // The Anthropic SDK refuses non-streaming requests when max_tokens is
+  // high enough that the call could exceed a 10-minute HTTP deadline.
+  // Using .stream(...).finalMessage() returns the same Message shape as
+  // .create(...) but over a long-lived streaming connection.
+  const stream = anthropic.messages.stream({
     model,
-    max_tokens: 8192,
+    max_tokens: outputCap,
     system: systemPrompt,
     messages: [{ role: "user", content }],
   });
+  const response = await stream.finalMessage();
 
   const stopReason = response.stop_reason;
   console.log(`[Claude Vision] <- stop: ${stopReason} | in: ${response.usage?.input_tokens} | out: ${response.usage?.output_tokens}`);
@@ -417,15 +423,17 @@ async function parseVisionClaude({ buffer, mimeType, filename, systemPrompt, use
   };
 }
 
-async function parseVisionGemini({ buffer, mimeType, filename, systemPrompt, userPrompt }) {
+async function parseVisionGemini({ buffer, mimeType, filename, systemPrompt, userPrompt, maxTokens }) {
   const genAI = getGeminiClient();
   const model = getModelName();
+  const outputCap = maxTokens || Number(process.env.GEMINI_VISION_MAX_TOKENS) || 32768;
 
-  console.log(`[Gemini Vision] -> model: ${model} | type: ${mimeType} | file: ${filename}`);
+  console.log(`[Gemini Vision] -> model: ${model} | type: ${mimeType} | file: ${filename} | max_tokens: ${outputCap}`);
 
   const genModel = genAI.getGenerativeModel({
     model,
     systemInstruction: systemPrompt,
+    generationConfig: { maxOutputTokens: outputCap },
   });
 
   const parts = [
@@ -506,6 +514,52 @@ async function generateText({ systemPrompt, userPrompt, maxTokens = 4096 }) {
 
 // --- Helper: extract JSON from LLM response --------------------------------
 
+// Best-effort repair of JSON that was cut off mid-output (LLM hit max_tokens).
+// Walks the text tracking bracket depth + string state, remembers the last
+// position where a container closed cleanly, then truncates there and
+// re-closes any still-open outer containers.
+function repairTruncatedJSON(text) {
+  const firstBrace = text.search(/[\{\[]/);
+  if (firstBrace === -1) return null;
+
+  const stack = []; // expected closers, LIFO
+  let inString = false;
+  let escape = false;
+  let lastSafeIdx = -1;
+  let lastSafeStack = null;
+
+  for (let i = firstBrace; i < text.length; i++) {
+    const c = text[i];
+    if (escape) { escape = false; continue; }
+    if (inString) {
+      if (c === "\\") escape = true;
+      else if (c === "\"") inString = false;
+      continue;
+    }
+    if (c === "\"") inString = true;
+    else if (c === "{") stack.push("}");
+    else if (c === "[") stack.push("]");
+    else if (c === "}" || c === "]") {
+      if (stack.length && stack[stack.length - 1] === c) {
+        stack.pop();
+        lastSafeIdx = i;
+        lastSafeStack = stack.slice();
+      } else {
+        break; // mismatched close — structure is corrupt before this point
+      }
+    }
+    // NOTE: we intentionally only mark safe points at container closes.
+    // String-close is NOT safe because the string may be a key (e.g.
+    // `{"name"` truncated at end-of-key), and closing there produces
+    // invalid JSON like `{"name"}`. Container closes are always safe.
+  }
+
+  if (lastSafeIdx === -1) return null;
+  const prefix = text.slice(firstBrace, lastSafeIdx + 1);
+  const closers = lastSafeStack.slice().reverse().join("");
+  try { return JSON.parse(prefix + closers); } catch (_) { return null; }
+}
+
 function extractJSON(text) {
   // Try markdown code block first
   let match = text.match(/```(?:json)?\n?([\s\S]*?)\n?```/);
@@ -533,9 +587,20 @@ function extractJSON(text) {
   // Fallback: try parsing the entire text
   try {
     return JSON.parse(text);
-  } catch (err) {
-    throw new Error(`Failed to parse LLM response as JSON. Raw: ${text.slice(0, 1000)}`);
+  } catch (_) { /* fall through to repair */ }
+
+  // Last resort: treat as truncated and close any open structures
+  const repaired = repairTruncatedJSON(text);
+  if (repaired) {
+    console.warn(`[extractJSON] Recovered via truncation repair (original length: ${text.length})`);
+    return repaired;
   }
+
+  const err = new Error("LLM response could not be parsed as JSON");
+  err.code = "LLM_JSON_PARSE_FAILED";
+  err.rawLength = text.length;
+  err.rawSnippet = text.slice(0, 500);
+  throw err;
 }
 
 module.exports = {

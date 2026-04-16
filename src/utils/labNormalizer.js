@@ -1907,7 +1907,9 @@ function determineOptimalFlag(value, entry) {
 function normalizeTests(parsedData) {
   if (!parsedData) return []
 
-  // Collect all tests from both tests[] and panels[].tests[]
+  // Tests live in parsedData.tests[]. panels[] only groups them by name and
+  // holds no test objects of its own (see pdfParser.js schema).
+  // Legacy parsedData docs may still have panels[].tests[] — keep tolerant.
   const rawTests = []
 
   if (Array.isArray(parsedData.tests)) {
@@ -1916,7 +1918,7 @@ function normalizeTests(parsedData) {
   if (Array.isArray(parsedData.panels)) {
     for (const panel of parsedData.panels) {
       if (Array.isArray(panel.tests)) {
-        for (const t of panel.tests) rawTests.push(t)
+        for (const t of panel.tests) rawTests.push(t) // legacy shape
       }
     }
   }

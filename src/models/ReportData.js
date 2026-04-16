@@ -30,10 +30,19 @@ const reportDataSchema = new mongoose.Schema({
     input: { type: Number, default: 0 },
     output: { type: Number, default: 0 },
   },
+  // SHA-256 of the raw uploaded file. Used to short-circuit duplicate uploads
+  // before we spend Claude tokens. Nullable for legacy rows.
+  fileHash: { type: String, default: null, index: true },
+  // Storage identifier for the original uploaded file. Opaque string — the
+  // current local-disk driver uses "<id>.<ext>"; swap the reportStorage
+  // module to put this somewhere else (S3/R2/etc).
+  storageKey: { type: String, default: null },
+  mimeType: { type: String, default: null },
 }, { timestamps: true, collection: 'reportsData' });
 
 reportDataSchema.index({ userId: 1, reportDate: -1 });
 reportDataSchema.index({ userId: 1, 'biomarkerPanel.canonicalName': 1, reportDate: -1 });
+reportDataSchema.index({ userId: 1, fileHash: 1 }, { sparse: true });
 
 const ReportData = mongoose.model('ReportData', reportDataSchema);
 

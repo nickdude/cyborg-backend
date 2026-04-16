@@ -1,4 +1,6 @@
 const fs = require("fs");
+const path = require("path");
+const crypto = require("crypto");
 const mongoose = require("mongoose");
 const ReportData = require("../models/ReportData");
 const User = require("../models/User");
@@ -10,9 +12,16 @@ const {
   buildFullBiomarkerPanel,
 } = require("../utils/derivedBiomarkers");
 const { computeScores } = require("../utils/scoringEngine");
+const reportStorage = require("../utils/reportStorage");
 
 const VISION_USER_PROMPT =
   "Extract every piece of data from this medical report into the JSON schema specified in your instructions. Be exhaustive — capture all tests, values, ranges, flags, patient details, and metadata.";
+
+const VISION_BASE_MAX_TOKENS =
+  Number(process.env.VISION_BASE_MAX_TOKENS) || 32768;
+const VISION_RETRY_MAX_TOKENS =
+  Number(process.env.VISION_RETRY_MAX_TOKENS) ||
+  Math.min(VISION_BASE_MAX_TOKENS * 2, 64000);
 
 /**
  * Extract reportDate from parsed data with fallback
@@ -24,6 +33,96 @@ function extractReportDate(parsedData) {
     parsedData?.reportDate;
   const parsed = dateStr ? new Date(dateStr) : null;
   return parsed && !isNaN(parsed) ? parsed : null;
+}
+
+/**
+ * Parse a report via vision AI with truncation-aware retry.
+ * On truncation: re-runs once with a larger token budget.
+ * Returns { parsedData, usage, truncated } or throws.
+ */
+function writeFailedParseDump({ userId, filename, mimeType, truncated, usage, text, err, stage }) {
+  try {
+    const dumpDir = path.join("uploads", "failed-parses");
+    fs.mkdirSync(dumpDir, { recursive: true });
+    const safeName = String(filename || "unknown").replace(/[^a-z0-9.-]/gi, "_");
+    const dumpPath = path.join(
+      dumpDir,
+      `${userId || "anon"}-${Date.now()}-${safeName}.txt`
+    );
+    fs.writeFileSync(
+      dumpPath,
+      [
+        `# Failed parse @ ${new Date().toISOString()}`,
+        `# stage: ${stage}`,
+        `# userId: ${userId}`,
+        `# filename: ${filename}`,
+        `# mimeType: ${mimeType}`,
+        `# truncated: ${truncated}`,
+        `# usage: ${JSON.stringify(usage || null)}`,
+        `# error: ${err?.message} (code=${err?.code || "n/a"})`,
+        `# errorStack: ${err?.stack || "n/a"}`,
+        `# rawLength: ${text?.length ?? 0}`,
+        ``,
+        text || "(no response text captured)",
+      ].join("\n")
+    );
+    console.warn(`[Reports] Wrote failed-parse dump -> ${dumpPath}`);
+    return dumpPath;
+  } catch (dumpErr) {
+    console.warn(`[Reports] dump-write-error: ${dumpErr.message}`);
+    return null;
+  }
+}
+
+async function parseReportResilient({ buffer, mimeType, filename, userId }) {
+  const baseOpts = {
+    buffer,
+    mimeType,
+    filename,
+    systemPrompt: pdfParserSystemPrompt,
+    userPrompt: VISION_USER_PROMPT,
+  };
+
+  let result = null;
+
+  try {
+    result = await parseVision({ ...baseOpts, maxTokens: VISION_BASE_MAX_TOKENS });
+  } catch (visionErr) {
+    const dumpPath = writeFailedParseDump({
+      userId, filename, mimeType,
+      truncated: false, usage: null, text: null,
+      err: visionErr, stage: "parseVision-primary",
+    });
+    visionErr.dumpPath = dumpPath;
+    throw visionErr;
+  }
+
+  if (result.truncated) {
+    console.warn(
+      `[Reports] Response truncated for user=${userId} file=${filename}. Retrying with maxTokens=${VISION_RETRY_MAX_TOKENS}`
+    );
+    try {
+      const retry = await parseVision({ ...baseOpts, maxTokens: VISION_RETRY_MAX_TOKENS });
+      if (retry?.text) result = retry;
+    } catch (retryErr) {
+      console.warn(
+        `[Reports] Retry errored for user=${userId} file=${filename}: ${retryErr.message}. Using original response.`
+      );
+    }
+  }
+
+  try {
+    const parsedData = extractJSON(result.text);
+    return { parsedData, usage: result.usage, truncated: result.truncated };
+  } catch (parseErr) {
+    const dumpPath = writeFailedParseDump({
+      userId, filename, mimeType,
+      truncated: result.truncated, usage: result.usage, text: result.text,
+      err: parseErr, stage: "extractJSON",
+    });
+    parseErr.dumpPath = dumpPath;
+    throw parseErr;
+  }
 }
 
 /**
@@ -50,16 +149,57 @@ const uploadReport = async (req, res, next) => {
     // Clean up temp file after reading into memory
     try { fs.unlinkSync(req.file.path); } catch (_) {}
 
-    // Parse with vision AI
-    const { text, usage } = await parseVision({
-      buffer,
-      mimeType,
-      filename,
-      systemPrompt: pdfParserSystemPrompt,
-      userPrompt: VISION_USER_PROMPT,
-    });
+    // Dedupe: short-circuit if this exact file was already parsed for this user.
+    // Computed pre-parse so duplicate uploads never burn LLM tokens.
+    const fileHash = crypto.createHash("sha256").update(buffer).digest("hex");
+    const existing = await ReportData.findOne({
+      userId: req.user.id,
+      fileHash,
+    })
+      .select("_id filename reportDate createdAt")
+      .lean();
+    if (existing) {
+      const when = (existing.reportDate || existing.createdAt || new Date()).toISOString().slice(0, 10);
+      return res.sendError(
+        `This report was already uploaded on ${when}. Refresh to view it.`,
+        409
+      );
+    }
 
-    const parsedData = extractJSON(text);
+    // Parse with vision AI (truncation-aware retry + JSON repair)
+    let parsedData, usage, truncated;
+    try {
+      const out = await parseReportResilient({
+        buffer,
+        mimeType,
+        filename,
+        userId: req.user.id,
+      });
+      parsedData = out.parsedData;
+      usage = out.usage;
+      truncated = out.truncated;
+    } catch (parseErr) {
+      // Concise single-line summary (Monitor-visible: contains "error"/"fail")
+      console.error(
+        `[Reports] parse-error stage=${parseErr.dumpPath ? "dumped" : "no-dump"} code=${parseErr.code || "n/a"} file=${filename} user=${req.user.id} dump=${parseErr.dumpPath || "none"} msg=${parseErr.message}`
+      );
+      console.error("[Reports] LLM parse failed", {
+        userId: req.user.id,
+        filename,
+        mimeType,
+        model: getModelName(),
+        code: parseErr.code || null,
+        rawLength: parseErr.rawLength ?? null,
+        rawSnippet: parseErr.rawSnippet ?? null,
+        dumpPath: parseErr.dumpPath ?? null,
+        message: parseErr.message,
+        stack: parseErr.stack,
+      });
+      return res.sendError(
+        "We couldn't read this report. Please re-upload or try a clearer scan.",
+        502
+      );
+    }
 
     // Normalize and compute biomarkers
     const normalized = normalizeTests(parsedData);
@@ -92,11 +232,26 @@ const uploadReport = async (req, res, next) => {
       );
     }
 
+    // Persist the raw upload so it can be viewed later. Key on a pre-generated
+    // id so the DB row and the on-disk file always share the same identity
+    // even if the later DB write races or fails.
+    const reportObjectId = new mongoose.Types.ObjectId();
+    let storageKey = null;
+    try {
+      storageKey = reportStorage.saveReport(buffer, reportObjectId.toString(), mimeType);
+    } catch (storageErr) {
+      console.warn(
+        `[Reports] Could not persist original file for report=${reportObjectId} user=${req.user.id}: ${storageErr.message}. Proceeding without storageKey.`
+      );
+    }
+
     // Create report document
     const reportData = await ReportData.create({
+      _id: reportObjectId,
       userId: req.user.id,
       sourceUrl: `upload://${filename}`,
       filename,
+      mimeType,
       parsedData,
       reportDate,
       reportLabel: "",
@@ -104,6 +259,8 @@ const uploadReport = async (req, res, next) => {
       scores,
       modelUsed: getModelName(),
       tokensUsed: usage,
+      fileHash,
+      storageKey,
     });
 
     // Update user: push to bloodReports array and set latest bloodReport
@@ -185,6 +342,40 @@ const getReport = async (req, res, next) => {
 };
 
 /**
+ * Stream the original uploaded file for a report back to the client.
+ * Gated by JWT (middleware) + user ownership (query filter).
+ */
+const getReportFile = async (req, res, next) => {
+  try {
+    const report = await ReportData.findOne({
+      _id: req.params.reportId,
+      userId: req.user.id,
+    })
+      .select("storageKey mimeType filename")
+      .lean();
+
+    if (!report) return res.sendError("Report not found", 404);
+    if (!report.storageKey) {
+      return res.sendError("Original file not stored for this report", 404);
+    }
+
+    const filePath = reportStorage.pathFor(report.storageKey);
+    if (!filePath || !fs.existsSync(filePath)) {
+      return res.sendError("File missing from storage", 404);
+    }
+
+    res.setHeader("Content-Type", report.mimeType || "application/octet-stream");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="${(report.filename || "report").replace(/"/g, "")}"`
+    );
+    fs.createReadStream(filePath).pipe(res);
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
  * Update report label and/or date
  */
 const updateReport = async (req, res, next) => {
@@ -223,6 +414,9 @@ const deleteReport = async (req, res, next) => {
     if (!report) {
       return res.sendError("Report not found", 404);
     }
+
+    // Best-effort remove of the stored original file. Non-throwing.
+    reportStorage.deleteReport(report.storageKey);
 
     // Pull from user's bloodReports array
     await User.findByIdAndUpdate(req.user.id, {
@@ -397,6 +591,7 @@ module.exports = {
   uploadReport,
   listReports,
   getReport,
+  getReportFile,
   updateReport,
   deleteReport,
   getBiomarkers,

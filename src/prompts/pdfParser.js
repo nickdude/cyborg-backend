@@ -52,19 +52,7 @@ Use this exact structure (include all keys even if null):
   "panels": [
     {
       "panelName": string,
-      "tests": [
-        {
-          "name": string,
-          "value": string,
-          "numericValue": number | null,
-          "unit": string | null,
-          "referenceRange": string | null,
-          "referenceMin": number | null,
-          "referenceMax": number | null,
-          "flag": "high" | "low" | "normal" | "critical" | null,
-          "severity": "mild" | "moderate" | "severe" | null
-        }
-      ]
+      "testNames": string[]
     }
   ],
   "diagnoses": string[] | null,
@@ -89,11 +77,13 @@ Rules:
     "moderate" = 21–50% outside
     "severe"   = >50% outside, or the lab itself marked it critical
   Set to null when flag is "normal" or null.
-- Group related tests under "panels" when the report shows them grouped (e.g., "Complete Blood Count", "Lipid Profile", "Liver Function Tests"). Also list them individually in "tests".
+- Every test goes into "tests[]" EXACTLY ONCE. Do NOT repeat the full test object inside panels.
+- "panels[]" groups tests by name only: each entry is { panelName, testNames[] } where testNames are strings that match the "name" field of entries in "tests[]". Use panels when the report itself labels a group (e.g., "Complete Blood Count", "Lipid Profile", "Liver Function Tests"). Skip "panels" entirely if no groupings are shown.
 - Dates should be in ISO 8601 format (YYYY-MM-DD) when possible.
 - If a value is not visible or not applicable, use null.
 - Capture ALL tests — do not skip any rows or values.
-- If the document has multiple pages, process all pages.`
+- If the document has multiple pages, process all pages.
+- Output raw JSON only — no markdown fences, no prose.`
 
 function buildVisionParserContent(base64Pages, mimeType = 'image/png') {
   const content = []
