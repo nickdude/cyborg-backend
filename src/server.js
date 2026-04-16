@@ -1,8 +1,36 @@
 require("dotenv").config();
+const crypto = require("crypto");
 const app = require("./app");
 const connectDB = require("./config/db");
 const seedQuestionnaire = require("../scripts/seedQuestionnaire");
 const { buildDatabaseSchema } = require("./utils/schemaBuilder");
+
+/**
+ * Backfill referral codes for existing doctors who don't have one
+ */
+const backfillDoctorReferralCodes = async () => {
+  const User = require("./models/User");
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  const doctors = await User.find({ userType: "doctor", referralCode: { $exists: false } });
+  const doctorsNull = await User.find({ userType: "doctor", referralCode: null });
+  const all = [...doctors, ...doctorsNull.filter((d) => !doctors.find((x) => x._id.equals(d._id)))];
+
+  if (all.length === 0) return;
+
+  for (const doc of all) {
+    let code;
+    let exists = true;
+    while (exists) {
+      const random = crypto.randomBytes(4).toString("hex").slice(0, 6);
+      code = "DR-" + Array.from(random).map((c) => chars[parseInt(c, 16) % chars.length]).join("");
+      exists = await User.findOne({ referralCode: code });
+    }
+    doc.referralCode = code;
+    await doc.save();
+    console.log(`[Backfill] Doctor ${doc.email || doc.phone} → referralCode: ${code}`);
+  }
+  console.log(`[Backfill] Assigned referral codes to ${all.length} doctor(s)`);
+};
 
 // Validate required environment variables
 const REQUIRED_ENV = ["MONGO_URI", "JWT_SECRET"];
@@ -27,6 +55,9 @@ const PORT = process.env.PORT || 5000;
 
 connectDB().then(() => {
   seedQuestionnaire();
+  backfillDoctorReferralCodes().catch((err) =>
+    console.error("[Backfill] Failed:", err.message)
+  );
   buildDatabaseSchema().catch((err) =>
     console.error("[SchemaBuilder] Init failed:", err.message)
   );

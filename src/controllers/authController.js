@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const User = require("../models/User");
 const sendEmail = require("../utils/sendEmail");
 const {
@@ -9,6 +10,21 @@ const {
 const { getOTPEmailTemplate, getResetPasswordEmailTemplate } = require("../utils/emailTemplates");
 const { validateEmail, validatePhone } = require("../middlewares/validateRequest");
 
+/**
+ * Generate a unique doctor referral code (e.g. DR-A7X9K2)
+ */
+const generateReferralCode = async () => {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // no I/1/O/0 to avoid confusion
+  let code;
+  let exists = true;
+  while (exists) {
+    const random = crypto.randomBytes(4).toString("hex").slice(0, 6);
+    code = "DR-" + Array.from(random).map((c) => chars[parseInt(c, 16) % chars.length]).join("");
+    exists = await User.findOne({ referralCode: code });
+  }
+  return code;
+};
+
 // ============== REGISTER ==============
 
 /**
@@ -17,7 +33,7 @@ const { validateEmail, validatePhone } = require("../middlewares/validateRequest
  */
 const register = async (req, res, next) => {
   try {
-    const { email, phone, userType, password } = req.body;
+    const { email, phone, userType, password, referralCode } = req.body;
 
     // Check if user already exists
     let existingUser = await User.findOne({
@@ -85,13 +101,32 @@ const register = async (req, res, next) => {
     const otp = generateOTP();
     const otpExpiry = getOTPExpiry();
 
+    // If patient provided a referral code, validate the doctor exists
+    let linkedDoctorId = null;
+    if (referralCode && userType === "user") {
+      const doctor = await User.findOne({
+        referralCode: referralCode.toUpperCase(),
+        userType: "doctor",
+      });
+      if (!doctor) {
+        return res.sendError("Invalid doctor referral code", 400);
+      }
+      linkedDoctorId = doctor._id;
+    }
+
     // Create new user (not verified yet)
     const newUser = new User({
       email: email || null,
       phone: phone || null,
       userType,
-      password: password || null, // Store password if provided during registration
+      password: password || null,
+      linkedDoctor: linkedDoctorId,
     });
+
+    // Generate referral code for doctors
+    if (userType === "doctor") {
+      newUser.referralCode = await generateReferralCode();
+    }
 
     // Save OTP and expiry based on login method
     if (email) {

@@ -94,13 +94,13 @@ const saveReferralSource = async (req, res, next) => {
     // Also update the user's whereYouHeardAboutUs field
     // Determine the primary source based on what's provided
     let whereYouHeardAboutUs = "Other";
-    if (socialMediaOrAd && Object.keys(socialMediaOrAd).length > 0) {
+    if (socialMediaOrAd?.platforms?.length > 0 || socialMediaOrAd?.otherText) {
       whereYouHeardAboutUs = "Social Media";
-    } else if (wordOfMouth && Object.keys(wordOfMouth).length > 0) {
+    } else if (wordOfMouth?.sources?.length > 0 || wordOfMouth?.otherText) {
       whereYouHeardAboutUs = "Friend Recommendation";
-    } else if (webSearch && Object.keys(webSearch).length > 0) {
+    } else if (webSearch?.engines?.length > 0 || webSearch?.otherText) {
       whereYouHeardAboutUs = "Search Engine";
-    } else if (podcast || creator || email) {
+    } else if (podcast?.note || creator?.note || email?.sources?.length > 0 || email?.otherText) {
       whereYouHeardAboutUs = "Advertisement";
     }
 
@@ -166,7 +166,7 @@ const getUserProfile = async (req, res, next) => {
       return res.sendError("User not found", 404);
     }
 
-    res.sendSuccess({
+    const profileData = {
       id: user._id,
       firstName: user.firstName,
       lastName: user.lastName,
@@ -187,7 +187,19 @@ const getUserProfile = async (req, res, next) => {
       phoneVerified: user.phoneVerified,
       onboardingCompleted: user.onboardingCompleted,
       createdAt: user.createdAt,
-    });
+    };
+
+    // Include doctor-specific fields
+    if (user.userType === "doctor") {
+      profileData.referralCode = user.referralCode;
+    }
+
+    // Include linked doctor for patients
+    if (user.userType === "user" && user.linkedDoctor) {
+      profileData.linkedDoctor = user.linkedDoctor;
+    }
+
+    res.sendSuccess(profileData);
   } catch (error) {
     next(error);
   }

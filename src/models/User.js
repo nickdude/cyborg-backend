@@ -36,6 +36,18 @@ const userSchema = new mongoose.Schema(
       required: true,
     },
 
+    // Doctor Referral (doctors get a unique code, patients link to a doctor)
+    referralCode: {
+      type: String,
+      unique: true,
+      sparse: true,
+    },
+    linkedDoctor: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+
     // Email Verification
     emailVerified: {
       type: Boolean,
