@@ -213,4 +213,85 @@ async function parseVisionTextOnly({ description, maxTokens }) {
   };
 }
 
-module.exports = { analyzeMeal };
+// Derives a title from the first one or two items when the user leaves it blank.
+function autoTitleFromItems(items) {
+  const names = (items || []).map((i) => i?.name).filter(Boolean);
+  if (names.length === 0) return "Meal";
+  if (names.length === 1) return names[0];
+  return `${names[0]}, ${names[1]}`;
+}
+
+/**
+ * POST /api/users/:userId/meals
+ * JSON body: { title?, consumedAt, totals, items, imageKeys, inputText? }
+ */
+const commitMeal = async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const { totals, items, imageKeys, inputText, confidence } = body;
+    const title = (body.title || "").trim();
+    const consumedAt = body.consumedAt ? new Date(body.consumedAt) : new Date();
+
+    if (isNaN(consumedAt.getTime())) {
+      return res.sendError("Invalid consumedAt timestamp.", 400);
+    }
+    if (!totals || typeof totals !== "object") {
+      return res.sendError("totals is required.", 400);
+    }
+    if (!Array.isArray(items)) {
+      return res.sendError("items must be an array.", 400);
+    }
+    if (imageKeys != null && !Array.isArray(imageKeys)) {
+      return res.sendError("imageKeys must be an array of strings.", 400);
+    }
+
+    // Validate every provided imageKey is a pending/ key that actually exists.
+    // We don't (yet) track per-user ownership tags on images in the local
+    // driver — that check will gain teeth when R2 lifecycle tags arrive.
+    const pendingKeys = imageKeys || [];
+    for (const k of pendingKeys) {
+      if (typeof k !== "string" || !k.includes("/pending/")) {
+        return res.sendError("Invalid image reference.", 400);
+      }
+      const abs = mealStorage.pathFor(k);
+      if (!abs || !fs.existsSync(abs)) {
+        return res.sendError("Image not found — may have expired. Re-upload.", 400);
+      }
+    }
+
+    // Promote each pending image to committed/.
+    const committedKeys = [];
+    try {
+      for (const k of pendingKeys) {
+        committedKeys.push(mealStorage.promote(k));
+      }
+    } catch (promoteErr) {
+      console.error(`[Meals] Promote failed user=${req.user.id}: ${promoteErr.message}`);
+      // Best effort cleanup: delete any images we already promoted in this
+      // request so we don't leave a half-committed set.
+      for (const k of committedKeys) mealStorage.remove(k);
+      return res.sendError("Couldn't finalize meal. Try again.", 500);
+    }
+
+    const finalTitle = title || autoTitleFromItems(items);
+
+    const meal = await Meal.create({
+      userId: req.user.id,
+      title: finalTitle,
+      consumedAt,
+      totals,
+      items,
+      imageKeys: committedKeys,
+      inputText: inputText || null,
+      confidence: confidence || null,
+      modelUsed: getModelName(),
+      tokensUsed: body.tokensUsed || { input: 0, output: 0 },
+    });
+
+    return res.sendSuccess(meal, "Meal saved", 201);
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = { analyzeMeal, commitMeal };
