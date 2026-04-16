@@ -443,11 +443,31 @@ const deleteMeal = async (req, res, next) => {
   }
 };
 
+/**
+ * GET /api/users/:userId/meals/:mealId
+ * Returns the meal if it belongs to the caller, 404 otherwise.
+ */
+const getMealById = async (req, res, next) => {
+  try {
+    const meal = await Meal.findOne({
+      _id: req.params.mealId,
+      userId: req.user.id,
+    }).lean();
+    if (!meal) {
+      return res.sendError("Meal not found.", 404);
+    }
+    return res.sendSuccess(meal, "Meal retrieved");
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   analyzeMeal,
   commitMeal,
   listMeals,
   getMealSummary,
+  getMealById,
   updateMeal,
   deleteMeal,
 };

@@ -37,6 +37,8 @@ router.get("/:userId/meals", mealController.listMeals);
 
 router.get("/:userId/meals/summary", mealController.getMealSummary);
 
+router.get("/:userId/meals/:mealId", mealController.getMealById);
+
 router.patch("/:userId/meals/:mealId", mealController.updateMeal);
 
 router.delete("/:userId/meals/:mealId", mealController.deleteMeal);
