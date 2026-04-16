@@ -375,4 +375,79 @@ const getMealSummary = async (req, res, next) => {
   }
 };
 
-module.exports = { analyzeMeal, commitMeal, listMeals, getMealSummary };
+const PATCHABLE_FIELDS = new Set([
+  "title",
+  "consumedAt",
+  "totals",
+  "items",
+  "inputText",
+]);
+
+/**
+ * PATCH /api/users/:userId/meals/:mealId
+ * Partial update. imageKeys/userId/_id/modelUsed/tokensUsed are NOT patchable.
+ */
+const updateMeal = async (req, res, next) => {
+  try {
+    const body = req.body || {};
+    const update = {};
+    for (const key of Object.keys(body)) {
+      if (!PATCHABLE_FIELDS.has(key)) continue;
+      if (key === "consumedAt") {
+        const d = new Date(body[key]);
+        if (isNaN(d.getTime())) {
+          return res.sendError("Invalid consumedAt timestamp.", 400);
+        }
+        update[key] = d;
+      } else {
+        update[key] = body[key];
+      }
+    }
+    if (Object.keys(update).length === 0) {
+      return res.sendError("No patchable fields provided.", 400);
+    }
+
+    const meal = await Meal.findOneAndUpdate(
+      { _id: req.params.mealId, userId: req.user.id },
+      { $set: update },
+      { new: true }
+    );
+    if (!meal) {
+      return res.sendError("Meal not found.", 404);
+    }
+    return res.sendSuccess(meal, "Meal updated");
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * DELETE /api/users/:userId/meals/:mealId
+ * Removes meal doc and best-effort deletes its stored images.
+ */
+const deleteMeal = async (req, res, next) => {
+  try {
+    const meal = await Meal.findOneAndDelete({
+      _id: req.params.mealId,
+      userId: req.user.id,
+    });
+    if (!meal) {
+      return res.sendError("Meal not found.", 404);
+    }
+    for (const key of meal.imageKeys || []) {
+      mealStorage.remove(key);
+    }
+    return res.sendSuccess({ ok: true }, "Meal deleted");
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = {
+  analyzeMeal,
+  commitMeal,
+  listMeals,
+  getMealSummary,
+  updateMeal,
+  deleteMeal,
+};
