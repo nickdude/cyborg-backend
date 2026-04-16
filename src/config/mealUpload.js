@@ -9,7 +9,9 @@ const fileFilter = (req, file, cb) => {
   if (ALLOWED_MIMES.includes(file.mimetype)) {
     return cb(null, true);
   }
-  cb(new Error("Only JPG, PNG, and WebP images are supported"), false);
+  const err = new Error("Only JPG, PNG, and WebP images are supported");
+  err.statusCode = 400;
+  cb(err, false);
 };
 
 const upload = multer({
