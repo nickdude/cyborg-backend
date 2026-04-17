@@ -153,8 +153,21 @@ async function streamChatClaude({
   let iteration = 0;
   let overloadRetries = 0;
 
+  const MAX_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || "12", 10);
+  const MAX_TOOL_CALLS = parseInt(process.env.MAX_TOOL_CALLS || "25", 10);
+
   while (true) {
     iteration++;
+    if (iteration > MAX_ITERATIONS) {
+      console.warn(`[Claude] iteration cap (${MAX_ITERATIONS}) reached; aborting loop`);
+      emit({ type: "error", message: "Assistant reached maximum reasoning steps. Try a simpler question." });
+      return { text: "", toolUses: allToolUses, thinkingMap: Object.keys(thinkingMap).length ? thinkingMap : null };
+    }
+    if (allToolUses.length > MAX_TOOL_CALLS) {
+      console.warn(`[Claude] tool-call cap (${MAX_TOOL_CALLS}) reached; aborting loop`);
+      emit({ type: "error", message: "Assistant reached maximum tool calls. Try a simpler question." });
+      return { text: "", toolUses: allToolUses, thinkingMap: Object.keys(thinkingMap).length ? thinkingMap : null };
+    }
     console.log(`[Claude] -> request #${iteration} | model: ${model} | thinking: ${thinkingEnabled} | messages: ${currentMessages.length}`);
 
     let accText = "";
@@ -267,6 +280,9 @@ async function streamChatGemini({
   let allToolUses = [];
   let iteration = 0;
 
+  const MAX_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || "12", 10);
+  const MAX_TOOL_CALLS = parseInt(process.env.MAX_TOOL_CALLS || "25", 10);
+
   // Convert tools to Gemini format
   const geminiTools = [{
     functionDeclarations: convertToolsForGemini(tools),
@@ -302,6 +318,16 @@ async function streamChatGemini({
 
   while (true) {
     iteration++;
+    if (iteration > MAX_ITERATIONS) {
+      console.warn(`[Gemini] iteration cap (${MAX_ITERATIONS}) reached; aborting loop`);
+      emit({ type: "error", message: "Assistant reached maximum reasoning steps. Try a simpler question." });
+      return { text: "", toolUses: allToolUses, thinkingMap: null };
+    }
+    if (allToolUses.length > MAX_TOOL_CALLS) {
+      console.warn(`[Gemini] tool-call cap (${MAX_TOOL_CALLS}) reached; aborting loop`);
+      emit({ type: "error", message: "Assistant reached maximum tool calls. Try a simpler question." });
+      return { text: "", toolUses: allToolUses, thinkingMap: null };
+    }
     console.log(`[Gemini] -> request #${iteration} | model: ${model} | messages: ${messages.length}`);
 
     const result = await chat.sendMessageStream(currentInput);
