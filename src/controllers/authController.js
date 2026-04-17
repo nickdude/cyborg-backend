@@ -177,7 +177,10 @@ const verifyOTP = async (req, res, next) => {
     }
 
     // Fetch the full user doc — we need token-relevant fields in the response.
-    const user = await User.findById(userId);
+    // OTP/expiry fields are `select: false` in the schema, so pull them in explicitly.
+    const user = await User.findById(userId).select(
+      "+emailOTP +emailOTPExpiry +phoneOTP +phoneOTPExpiry"
+    );
 
     if (!user) {
       return res.sendError("User not found", 404);
