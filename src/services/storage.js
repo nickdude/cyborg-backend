@@ -58,6 +58,10 @@ function getClient() {
       accessKeyId: R2_ACCESS_KEY_ID,
       secretAccessKey: R2_SECRET_ACCESS_KEY,
     },
+    // R2 doesn't support AWS SDK v3's default CRC32 flexible-checksum algorithm.
+    // These two options fall back to the older MD5 behaviour that R2 accepts.
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
   });
   return _client;
 }
