@@ -176,9 +176,8 @@ const verifyOTP = async (req, res, next) => {
       return res.sendError("Invalid type. Must be 'email' or 'phone'", 400);
     }
 
-    const user = await User.findById(userId).select(
-      `${type}OTP ${type}OTPExpiry ${type}`
-    );
+    // Fetch the full user doc — we need token-relevant fields in the response.
+    const user = await User.findById(userId);
 
     if (!user) {
       return res.sendError("User not found", 404);
@@ -204,8 +203,33 @@ const verifyOTP = async (req, res, next) => {
 
     await user.save();
 
+    // OTP proves ownership — issue the session token so the registration flow
+    // lands the user directly signed-in (no extra login round-trip).
+    const token = user.generateToken();
+
+    const Subscription = require("../models/Subscription");
+    const activeSubscription = await Subscription.findOne({
+      userId: user._id,
+      status: "active",
+      expiryDate: { $gt: new Date() },
+    });
+
     res.sendSuccess(
-      { userId: user._id },
+      {
+        token,
+        user: {
+          id: user._id,
+          email: user.email,
+          phone: user.phone,
+          firstName: user.firstName,
+          lastName: user.lastName,
+          userType: user.userType,
+          onboardingCompleted: user.onboardingCompleted,
+          whereYouHeardAboutUs: user.whereYouHeardAboutUs,
+          hasSeenWelcome: user.hasSeenWelcome,
+          hasActiveSubscription: !!activeSubscription,
+        },
+      },
       `${type.charAt(0).toUpperCase() + type.slice(1)} verified successfully`
     );
   } catch (error) {

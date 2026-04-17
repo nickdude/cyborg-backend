@@ -35,6 +35,8 @@ router.post("/:userId/meals", mealController.commitMeal);
 
 router.get("/:userId/meals", mealController.listMeals);
 
+router.get("/:userId/meals/history", mealController.getMealHistory);
+
 router.get("/:userId/meals/summary", mealController.getMealSummary);
 
 router.get("/:userId/meals/:mealId", mealController.getMealById);

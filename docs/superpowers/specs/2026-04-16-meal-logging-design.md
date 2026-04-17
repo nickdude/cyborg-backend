@@ -189,7 +189,7 @@ Interface modeled on the existing `reportStorage` but named for meals:
 
 ```js
 save(buffer, mimeType) → key            // writes to pending/, returns the generated key
-promote(key) → newKey                    // pending/ → committed/, returns the new key
+promote(key) → newKey                     // pending/ → committed/, returns the new key
 delete(key)                              // removes (no-op if missing)
 pathFor(key) → absolutePath              // for streaming or reading back
 ```
