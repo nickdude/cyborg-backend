@@ -142,6 +142,13 @@ const userSchema = new mongoose.Schema(
         ref: "ReportData",
       },
     ],
+    // Flips true once a blood report has been parsed end-to-end. Frontend
+    // dashboard uses this (alongside bloodReports.length > 0) to switch from
+    // the "Scheduled" variant to the "Insights" variant.
+    latestReportReady: {
+      type: Boolean,
+      default: false,
+    },
 
     // Profile
     profilePicture: String,

@@ -231,6 +231,7 @@ const verifyOTP = async (req, res, next) => {
           whereYouHeardAboutUs: user.whereYouHeardAboutUs,
           hasSeenWelcome: user.hasSeenWelcome,
           hasActiveSubscription: !!activeSubscription,
+          latestReportReady: !!user.latestReportReady,
         },
       },
       `${type.charAt(0).toUpperCase() + type.slice(1)} verified successfully`
@@ -331,6 +332,7 @@ const login = async (req, res, next) => {
             whereYouHeardAboutUs: user.whereYouHeardAboutUs,
             hasSeenWelcome: user.hasSeenWelcome,
             hasActiveSubscription: !!activeSubscription,
+            latestReportReady: !!user.latestReportReady,
           },
         },
         "Login successful",
@@ -426,6 +428,7 @@ const verifyLoginOTP = async (req, res, next) => {
           whereYouHeardAboutUs: user.whereYouHeardAboutUs,
           hasSeenWelcome: user.hasSeenWelcome,
           hasActiveSubscription: !!activeSubscription,
+          latestReportReady: !!user.latestReportReady,
         },
       },
       "Login successful",

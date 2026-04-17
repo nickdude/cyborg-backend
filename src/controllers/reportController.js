@@ -269,9 +269,11 @@ const uploadReport = async (req, res, next) => {
       storageKey,
     });
 
-    // Update user: push to bloodReports array and set latest bloodReport
+    // Update user: push to bloodReports array, set latest bloodReport, and
+    // flip latestReportReady so the dashboard switches to the Insights view.
     await User.findByIdAndUpdate(req.user.id, {
       bloodReport: reportData._id,
+      latestReportReady: true,
       $addToSet: { bloodReports: reportData._id },
     });
 
@@ -285,6 +287,7 @@ const uploadReport = async (req, res, next) => {
         biomarkerPanel,
         scores,
         uploadedAt: reportData.createdAt,
+        latestReportReady: true,
       },
       "Blood report uploaded and parsed successfully",
       201
