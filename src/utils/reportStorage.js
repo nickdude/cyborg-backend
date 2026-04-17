@@ -48,6 +48,12 @@ async function signedUrlFor(storageKey, expiresIn = 3600) {
   return storage.getSignedUrl(storageKey, expiresIn);
 }
 
+/** Fetch a stored report as a stream. Returns { body, contentType, contentLength }. */
+async function fetchReport(storageKey) {
+  if (!storageKey) throw new Error("fetchReport requires storageKey");
+  return storage.getObject(storageKey);
+}
+
 /** Best-effort delete — swallows errors so caller flow isn't blocked. */
 async function deleteReport(storageKey) {
   if (!storageKey) return;
@@ -62,6 +68,7 @@ module.exports = {
   saveReport,
   publicUrlFor,
   signedUrlFor,
+  fetchReport,
   deleteReport,
   buildKey,
 };

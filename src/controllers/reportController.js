@@ -366,23 +366,33 @@ const getReportFile = async (req, res, next) => {
 
     if (!report) return res.sendError("Report not found", 404);
     if (!report.storageKey) {
-      // Legacy rows without storageKey. If sourceUrl looks like an http URL
-      // (e.g. an older row that was already migrated) redirect to that.
-      if (report.sourceUrl && /^https?:\/\//i.test(report.sourceUrl)) {
-        return res.redirect(302, report.sourceUrl);
-      }
+      // Legacy rows without storageKey have nothing to stream.
       return res.sendError("Original file not stored for this report", 404);
     }
 
-    const publicUrl = reportStorage.publicUrlFor(report.storageKey);
-    if (publicUrl) return res.redirect(302, publicUrl);
-
-    // Fallback: sign the object for 1 hour.
+    // Stream the object through the backend so browsers never cross-origin to
+    // R2 (the public r2.dev bucket has no CORS headers, so XHR/fetch calls
+    // followed through a 302 redirect get blocked).
     try {
-      const signed = await reportStorage.signedUrlFor(report.storageKey, 3600);
-      return res.redirect(302, signed);
+      const { body, contentType, contentLength } = await reportStorage.fetchReport(
+        report.storageKey
+      );
+      res.setHeader("Content-Type", contentType || report.mimeType || "application/octet-stream");
+      if (contentLength) res.setHeader("Content-Length", contentLength);
+      if (report.filename) {
+        res.setHeader(
+          "Content-Disposition",
+          `inline; filename="${report.filename.replace(/"/g, "")}"`
+        );
+      }
+      body.on("error", (err) => {
+        console.error(`[Reports] Stream error for ${report.storageKey}: ${err.message}`);
+        if (!res.headersSent) res.sendError("File unavailable", 500);
+        else res.destroy(err);
+      });
+      return body.pipe(res);
     } catch (err) {
-      console.error(`[Reports] Failed to sign URL for ${report.storageKey}: ${err.message}`);
+      console.error(`[Reports] Failed to fetch ${report.storageKey}: ${err.message}`);
       return res.sendError("File unavailable", 500);
     }
   } catch (err) {

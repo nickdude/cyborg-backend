@@ -103,6 +103,24 @@ async function getSignedUrl(key, expiresIn = 3600) {
   return awsGetSignedUrl(client, cmd, { expiresIn });
 }
 
+/**
+ * Fetch an object from R2. Returns { body, contentType, contentLength } where
+ * `body` is a Node Readable stream (what the AWS SDK v3 gives back). Callers
+ * are responsible for piping to a response and handling stream errors.
+ */
+async function getObject(key) {
+  if (!key) throw new Error("getObject requires key");
+  const client = getClient();
+  const res = await client.send(
+    new GetObjectCommand({ Bucket: R2_BUCKET, Key: key })
+  );
+  return {
+    body: res.Body,
+    contentType: res.ContentType,
+    contentLength: res.ContentLength,
+  };
+}
+
 async function deleteObject(key) {
   if (!key) return;
   const client = getClient();
@@ -132,6 +150,7 @@ module.exports = {
   uploadBuffer,
   getPublicUrl,
   getSignedUrl,
+  getObject,
   deleteObject,
   keyExists,
 };
