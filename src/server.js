@@ -32,6 +32,31 @@ const backfillDoctorReferralCodes = async () => {
   console.log(`[Backfill] Assigned referral codes to ${all.length} doctor(s)`);
 };
 
+/**
+ * Backfill latestReportReady=true for users who already have blood reports
+ * but predate the flag. Idempotent — only touches docs where the flag is
+ * currently falsy and the user has ≥ 1 entry in bloodReports.
+ */
+const backfillLatestReportReady = async () => {
+  const User = require("./models/User");
+  const result = await User.updateMany(
+    {
+      bloodReports: { $exists: true, $not: { $size: 0 } },
+      $or: [
+        { latestReportReady: { $exists: false } },
+        { latestReportReady: false },
+        { latestReportReady: null },
+      ],
+    },
+    { $set: { latestReportReady: true } }
+  );
+  if (result.modifiedCount > 0) {
+    console.log(
+      `[Backfill] latestReportReady=true for ${result.modifiedCount} existing user(s) with reports`
+    );
+  }
+};
+
 // Validate required environment variables
 const REQUIRED_ENV = ["MONGO_URI", "JWT_SECRET"];
 const missing = REQUIRED_ENV.filter((key) => !process.env[key]);
@@ -57,6 +82,9 @@ connectDB().then(() => {
   seedQuestionnaire();
   backfillDoctorReferralCodes().catch((err) =>
     console.error("[Backfill] Failed:", err.message)
+  );
+  backfillLatestReportReady().catch((err) =>
+    console.error("[Backfill latestReportReady] Failed:", err.message)
   );
   buildDatabaseSchema().catch((err) =>
     console.error("[SchemaBuilder] Init failed:", err.message)

@@ -231,7 +231,9 @@ const verifyOTP = async (req, res, next) => {
           whereYouHeardAboutUs: user.whereYouHeardAboutUs,
           hasSeenWelcome: user.hasSeenWelcome,
           hasActiveSubscription: !!activeSubscription,
-          latestReportReady: !!user.latestReportReady,
+          latestReportReady:
+            !!user.latestReportReady ||
+            (Array.isArray(user.bloodReports) && user.bloodReports.length > 0),
         },
       },
       `${type.charAt(0).toUpperCase() + type.slice(1)} verified successfully`
@@ -332,7 +334,9 @@ const login = async (req, res, next) => {
             whereYouHeardAboutUs: user.whereYouHeardAboutUs,
             hasSeenWelcome: user.hasSeenWelcome,
             hasActiveSubscription: !!activeSubscription,
-            latestReportReady: !!user.latestReportReady,
+            latestReportReady:
+            !!user.latestReportReady ||
+            (Array.isArray(user.bloodReports) && user.bloodReports.length > 0),
           },
         },
         "Login successful",
@@ -428,7 +432,9 @@ const verifyLoginOTP = async (req, res, next) => {
           whereYouHeardAboutUs: user.whereYouHeardAboutUs,
           hasSeenWelcome: user.hasSeenWelcome,
           hasActiveSubscription: !!activeSubscription,
-          latestReportReady: !!user.latestReportReady,
+          latestReportReady:
+            !!user.latestReportReady ||
+            (Array.isArray(user.bloodReports) && user.bloodReports.length > 0),
         },
       },
       "Login successful",
