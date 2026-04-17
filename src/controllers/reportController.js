@@ -13,6 +13,7 @@ const {
 } = require("../utils/derivedBiomarkers");
 const { computeScores } = require("../utils/scoringEngine");
 const reportStorage = require("../utils/reportStorage");
+const storage = require("../services/storage");
 
 const VISION_USER_PROMPT =
   "Extract every piece of data from this medical report into the JSON schema specified in your instructions. Be exhaustive — capture all tests, values, ranges, flags, patient details, and metadata.";
@@ -134,20 +135,17 @@ const uploadReport = async (req, res, next) => {
       return res.sendError("No file provided", 400);
     }
 
-    // Validate MIME type
+    // Validate MIME type (multer fileFilter is the primary gate, this is a belt-and-suspenders check)
     const ALLOWED_MIMES = ["application/pdf", "image/jpeg", "image/png", "image/jpg", "image/webp"];
     if (!ALLOWED_MIMES.includes(req.file.mimetype)) {
-      // Clean up temp file
-      try { fs.unlinkSync(req.file.path); } catch (_) {}
       return res.sendError("Only PDF and image files (JPG, PNG, WEBP) are allowed", 400);
     }
 
-    const buffer = fs.readFileSync(req.file.path);
+    // Multer is configured with memoryStorage — the buffer arrives in-memory.
+    // No disk I/O, no temp file cleanup.
+    const buffer = req.file.buffer;
     const filename = req.file.originalname;
     const mimeType = req.file.mimetype;
-
-    // Clean up temp file after reading into memory
-    try { fs.unlinkSync(req.file.path); } catch (_) {}
 
     // Dedupe: short-circuit if this exact file was already parsed for this user.
     // Computed pre-parse so duplicate uploads never burn LLM tokens.
@@ -232,16 +230,24 @@ const uploadReport = async (req, res, next) => {
       );
     }
 
-    // Persist the raw upload so it can be viewed later. Key on a pre-generated
-    // id so the DB row and the on-disk file always share the same identity
-    // even if the later DB write races or fails.
+    // Persist the raw upload to R2 so it can be viewed later. Key is derived
+    // from userId + file hash so duplicate uploads (same user, same bytes)
+    // land on the same object — complements the DB-level dedupe above.
     const reportObjectId = new mongoose.Types.ObjectId();
     let storageKey = null;
+    let sourceUrl = `upload://${filename}`; // fallback if R2 isn't configured
     try {
-      storageKey = reportStorage.saveReport(buffer, reportObjectId.toString(), mimeType);
+      storageKey = await reportStorage.saveReport({
+        userId: req.user.id,
+        fileHash,
+        buffer,
+        mimeType,
+      });
+      const publicUrl = reportStorage.publicUrlFor(storageKey);
+      if (publicUrl) sourceUrl = publicUrl;
     } catch (storageErr) {
       console.warn(
-        `[Reports] Could not persist original file for report=${reportObjectId} user=${req.user.id}: ${storageErr.message}. Proceeding without storageKey.`
+        `[Reports] Could not persist original file to R2 for report=${reportObjectId} user=${req.user.id}: ${storageErr.message}. Proceeding without storageKey.`
       );
     }
 
@@ -249,7 +255,7 @@ const uploadReport = async (req, res, next) => {
     const reportData = await ReportData.create({
       _id: reportObjectId,
       userId: req.user.id,
-      sourceUrl: `upload://${filename}`,
+      sourceUrl,
       filename,
       mimeType,
       parsedData,
@@ -303,6 +309,7 @@ const listReports = async (req, res, next) => {
     const result = reports.map((r) => ({
       _id: r._id,
       filename: r.filename || r.sourceUrl,
+      sourceUrl: r.sourceUrl && /^https?:\/\//i.test(r.sourceUrl) ? r.sourceUrl : null,
       reportDate: r.reportDate || r.createdAt,
       reportLabel: r.reportLabel || "",
       flaggedCount:
@@ -342,8 +349,11 @@ const getReport = async (req, res, next) => {
 };
 
 /**
- * Stream the original uploaded file for a report back to the client.
- * Gated by JWT (middleware) + user ownership (query filter).
+ * Return a URL to the original uploaded file. Gated by JWT + ownership.
+ *
+ * Prefers a public r2.dev URL (fast, cacheable). Falls back to a signed URL
+ * if the bucket isn't configured for public access. Responds with a 302
+ * redirect so <a href>/<iframe src> usage "just works" from the frontend.
  */
 const getReportFile = async (req, res, next) => {
   try {
@@ -351,25 +361,30 @@ const getReportFile = async (req, res, next) => {
       _id: req.params.reportId,
       userId: req.user.id,
     })
-      .select("storageKey mimeType filename")
+      .select("storageKey mimeType filename sourceUrl")
       .lean();
 
     if (!report) return res.sendError("Report not found", 404);
     if (!report.storageKey) {
+      // Legacy rows without storageKey. If sourceUrl looks like an http URL
+      // (e.g. an older row that was already migrated) redirect to that.
+      if (report.sourceUrl && /^https?:\/\//i.test(report.sourceUrl)) {
+        return res.redirect(302, report.sourceUrl);
+      }
       return res.sendError("Original file not stored for this report", 404);
     }
 
-    const filePath = reportStorage.pathFor(report.storageKey);
-    if (!filePath || !fs.existsSync(filePath)) {
-      return res.sendError("File missing from storage", 404);
-    }
+    const publicUrl = reportStorage.publicUrlFor(report.storageKey);
+    if (publicUrl) return res.redirect(302, publicUrl);
 
-    res.setHeader("Content-Type", report.mimeType || "application/octet-stream");
-    res.setHeader(
-      "Content-Disposition",
-      `inline; filename="${(report.filename || "report").replace(/"/g, "")}"`
-    );
-    fs.createReadStream(filePath).pipe(res);
+    // Fallback: sign the object for 1 hour.
+    try {
+      const signed = await reportStorage.signedUrlFor(report.storageKey, 3600);
+      return res.redirect(302, signed);
+    } catch (err) {
+      console.error(`[Reports] Failed to sign URL for ${report.storageKey}: ${err.message}`);
+      return res.sendError("File unavailable", 500);
+    }
   } catch (err) {
     next(err);
   }
@@ -415,8 +430,8 @@ const deleteReport = async (req, res, next) => {
       return res.sendError("Report not found", 404);
     }
 
-    // Best-effort remove of the stored original file. Non-throwing.
-    reportStorage.deleteReport(report.storageKey);
+    // Best-effort remove of the stored original file from R2. Non-throwing.
+    await reportStorage.deleteReport(report.storageKey);
 
     // Pull from user's bloodReports array
     await User.findByIdAndUpdate(req.user.id, {
