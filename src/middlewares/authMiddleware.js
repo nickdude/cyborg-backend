@@ -2,6 +2,10 @@
 
 const jwt = require("jsonwebtoken");
 
+if (!process.env.JWT_SECRET) {
+  throw new Error("JWT_SECRET env var is required");
+}
+
 const verifyToken = (req, res, next) => {
   try {
     const token =
@@ -11,7 +15,7 @@ const verifyToken = (req, res, next) => {
       return res.sendError("Access token is required", 401);
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || "your_secret_key");
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded;
     next();
   } catch (error) {

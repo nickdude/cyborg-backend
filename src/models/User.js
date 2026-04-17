@@ -199,7 +199,7 @@ userSchema.methods.generateToken = function () {
       phone: this.phone,
       userType: this.userType,
     },
-    process.env.JWT_SECRET || "your_secret_key",
+    process.env.JWT_SECRET,
     { expiresIn: "7d" }
   );
 };
