@@ -16,8 +16,9 @@ const { definition: searchMedicalEvidenceDef, execute: searchMedicalEvidenceExec
 const { definition: suggestMedicationDef, execute: suggestMedicationExec } = require("../tools/suggestMedication");
 const { definition: getSchemaInfoDef, execute: getSchemaInfoExec } = require("../tools/getSchemaInfo");
 const { saveMemoryTool, recallMemoriesTool } = require("../tools/episodicMemory");
+const { definition: getMealDataDef, execute: getMealDataExec } = require("../tools/getMealData");
 
-// All 10 tool definitions for the AI model
+// All 11 tool definitions for the AI model
 const TOOLS = [
   webSearchDef,
   getMedicalDataDef,
@@ -29,6 +30,7 @@ const TOOLS = [
   saveMemoryTool.definition,
   recallMemoriesTool.definition,
   getWearableDataDef,
+  getMealDataDef,
 ];
 
 /**
@@ -97,6 +99,8 @@ async function executeToolByName(name, input, userId, chatId) {
       return recallMemoriesTool.execute(input, userId, chatId);
     case "getWearableData":
       return getWearableDataExec(input, userId, chatId);
+    case "getMealData":
+      return getMealDataExec(input, userId, chatId);
     default:
       return { error: `Unknown tool: ${name}` };
   }
