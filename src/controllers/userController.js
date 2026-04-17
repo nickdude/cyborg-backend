@@ -32,8 +32,13 @@ const saveOnboardingAnswers = async (req, res, next) => {
 
     await onboardingAnswer.save();
 
-    // Update user
-    user.whereYouHeardAboutUs = whereYouHeardAboutUs;
+    // Update user. Don't touch whereYouHeardAboutUs unless the caller explicitly
+    // sent one — it's owned by the dedicated /hear-about-us endpoint, and
+    // overwriting with `undefined` here used to wipe a previously-saved value
+    // and bounce the user back to the hear-about-us page on next login.
+    if (whereYouHeardAboutUs !== undefined) {
+      user.whereYouHeardAboutUs = whereYouHeardAboutUs;
+    }
     user.onboardingAnswers = onboardingAnswer._id;
     user.onboardingCompleted = true;
     await user.save();
