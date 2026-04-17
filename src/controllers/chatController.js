@@ -230,10 +230,22 @@ const sendMessage = async (req, res, next) => {
     res.setHeader("X-Accel-Buffering", "no");
     res.flushHeaders();
 
-    // 7. Create emit function
-    const emit = (data) => {
+    req.on("close", () => {
       if (!res.writableEnded) {
+        console.log(
+          `[SSE] Client disconnected mid-stream for chat ${req.params.id}; continuing to completion.`
+        );
+      }
+    });
+
+    // 7. Create emit function (resilient to client disconnect)
+    const emit = (data) => {
+      if (res.writableEnded || res.destroyed || !res.writable) return;
+      try {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
+      } catch (err) {
+        // Client disconnected — swallow so the agentic loop continues
+        // and the final chat.save() still runs.
       }
     };
 
