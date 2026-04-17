@@ -259,8 +259,16 @@ const sendMessage = async (req, res, next) => {
     const thinkingBudget = parseInt(process.env.THINKING_BUDGET_TOKENS || "8000", 10);
 
     try {
-      // 9. Call streamChat with agentic loop
-      const { text, toolUses, thinkingMap } = await streamChat({
+      // 9. Call streamChat with agentic loop (with wall-clock timeout)
+      const CHAT_TIMEOUT_MS = parseInt(process.env.CHAT_TIMEOUT_MS || "180000", 10);
+      let timeoutHandle;
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error("chat_timeout")),
+          CHAT_TIMEOUT_MS
+        );
+      });
+      const streamPromise = streamChat({
         messages: contextMessages,
         systemPrompt,
         tools: TOOLS,
@@ -272,6 +280,10 @@ const sendMessage = async (req, res, next) => {
         enableThinking,
         thinkingBudget,
       });
+      const { text, toolUses, thinkingMap } = await Promise.race([
+        streamPromise,
+        timeoutPromise,
+      ]).finally(() => clearTimeout(timeoutHandle));
 
       // 10. Save assistant message
       chat.messages.push({
@@ -300,7 +312,14 @@ const sendMessage = async (req, res, next) => {
       );
     } catch (err) {
       console.error("[SSE] Stream error:", err);
-      emit({ type: "error", message: "Something went wrong. Please try again." });
+      if (err?.message === "chat_timeout") {
+        emit({
+          type: "error",
+          message: "The assistant took too long to respond. Please try a simpler question.",
+        });
+      } else {
+        emit({ type: "error", message: "Something went wrong. Please try again." });
+      }
     } finally {
       // 13. Close SSE
       if (!res.writableEnded) res.end();
