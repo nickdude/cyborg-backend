@@ -59,11 +59,11 @@ const analyzeMeal = async (req, res, next) => {
 
     // Persist each uploaded image to pending/ first — if Claude blows up we
     // still rely on the orphan GC rather than trying to clean up on every
-    // error path.
+    // error path. mealStorage.save is async now (uploads to R2).
     const imageKeys = [];
     for (const f of files) {
       try {
-        const key = mealStorage.save(f.buffer, f.mimetype);
+        const key = await mealStorage.save(f.buffer, f.mimetype, req.user.id);
         imageKeys.push(key);
       } catch (storageErr) {
         console.error(
@@ -213,6 +213,20 @@ async function parseVisionTextOnly({ description, maxTokens }) {
   };
 }
 
+/**
+ * Attach R2 public URLs for each imageKey so the frontend can render
+ * <img src> directly. Null URLs are filtered out (e.g. when public
+ * access isn't configured).
+ */
+function attachImageUrls(meal) {
+  if (!meal) return meal;
+  const keys = meal.imageKeys || [];
+  const urls = keys
+    .map((k) => mealStorage.publicUrlFor(k))
+    .filter(Boolean);
+  return { ...meal, imageUrls: urls };
+}
+
 // Derives a title from the first one or two items when the user leaves it blank.
 function autoTitleFromItems(items) {
   const names = (items || []).map((i) => i?.name).filter(Boolean);
@@ -245,31 +259,37 @@ const commitMeal = async (req, res, next) => {
       return res.sendError("imageKeys must be an array of strings.", 400);
     }
 
-    // Validate every provided imageKey is a pending/ key that actually exists.
-    // We don't (yet) track per-user ownership tags on images in the local
-    // driver — that check will gain teeth when R2 lifecycle tags arrive.
+    // Validate every provided imageKey is a pending/ key that actually exists
+    // in R2. Ownership is enforced by the userId segment in the key prefix
+    // (the pending key embeds req.user.id at save() time).
     const pendingKeys = imageKeys || [];
     for (const k of pendingKeys) {
       if (typeof k !== "string" || !k.includes("/pending/")) {
         return res.sendError("Invalid image reference.", 400);
       }
-      const abs = mealStorage.pathFor(k);
-      if (!abs || !fs.existsSync(abs)) {
+      if (!k.includes(`/pending/${req.user.id}/`)) {
+        return res.sendError("Invalid image reference.", 400);
+      }
+      const ok = await mealStorage.pathFor(k);
+      if (!ok) {
         return res.sendError("Image not found — may have expired. Re-upload.", 400);
       }
     }
 
-    // Promote each pending image to committed/.
+    // Promote each pending image to committed/ (R2 CopyObject + Delete).
     const committedKeys = [];
     try {
       for (const k of pendingKeys) {
-        committedKeys.push(mealStorage.promote(k));
+        committedKeys.push(await mealStorage.promote(k));
       }
     } catch (promoteErr) {
       console.error(`[Meals] Promote failed user=${req.user.id}: ${promoteErr.message}`);
       // Best effort cleanup: delete any images we already promoted in this
       // request so we don't leave a half-committed set.
-      for (const k of committedKeys) mealStorage.remove(k);
+      for (const k of committedKeys) {
+        // fire-and-forget
+        mealStorage.remove(k).catch(() => {});
+      }
       return res.sendError("Couldn't finalize meal. Try again.", 500);
     }
 
@@ -288,7 +308,7 @@ const commitMeal = async (req, res, next) => {
       tokensUsed: body.tokensUsed || { input: 0, output: 0 },
     });
 
-    return res.sendSuccess(meal, "Meal saved", 201);
+    return res.sendSuccess(attachImageUrls(meal.toObject()), "Meal saved", 201);
   } catch (error) {
     next(error);
   }
@@ -303,6 +323,32 @@ function utcDayBounds(dateStr) {
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
   return { start, end };
 }
+
+/**
+ * GET /api/users/:userId/meals/history?days=14
+ * Returns meals from the last N days (default 14, clamped to 1..90),
+ * ordered newest first. The frontend groups them into Today / Yesterday /
+ * date sections.
+ */
+const getMealHistory = async (req, res, next) => {
+  try {
+    const raw = parseInt(req.query.days, 10);
+    const days = Number.isFinite(raw) ? Math.min(90, Math.max(1, raw)) : 14;
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+    const meals = await Meal.find({
+      userId: req.user.id,
+      consumedAt: { $gte: since },
+    })
+      .sort({ consumedAt: -1, createdAt: -1 })
+      .lean();
+    return res.sendSuccess(
+      { days, meals: meals.map(attachImageUrls) },
+      "Meal history retrieved"
+    );
+  } catch (error) {
+    next(error);
+  }
+};
 
 /**
  * GET /api/users/:userId/meals?date=YYYY-MM-DD
@@ -320,7 +366,7 @@ const listMeals = async (req, res, next) => {
     })
       .sort({ consumedAt: -1, createdAt: -1 })
       .lean();
-    return res.sendSuccess(meals, "Meals retrieved");
+    return res.sendSuccess(meals.map(attachImageUrls), "Meals retrieved");
   } catch (error) {
     next(error);
   }
@@ -415,7 +461,7 @@ const updateMeal = async (req, res, next) => {
     if (!meal) {
       return res.sendError("Meal not found.", 404);
     }
-    return res.sendSuccess(meal, "Meal updated");
+    return res.sendSuccess(attachImageUrls(meal.toObject()), "Meal updated");
   } catch (error) {
     next(error);
   }
@@ -434,8 +480,9 @@ const deleteMeal = async (req, res, next) => {
     if (!meal) {
       return res.sendError("Meal not found.", 404);
     }
+    // Fire-and-forget deletes — client doesn't need to wait for R2 to ack.
     for (const key of meal.imageKeys || []) {
-      mealStorage.remove(key);
+      mealStorage.remove(key).catch(() => {});
     }
     return res.sendSuccess({ ok: true }, "Meal deleted");
   } catch (error) {
@@ -456,7 +503,7 @@ const getMealById = async (req, res, next) => {
     if (!meal) {
       return res.sendError("Meal not found.", 404);
     }
-    return res.sendSuccess(meal, "Meal retrieved");
+    return res.sendSuccess(attachImageUrls(meal), "Meal retrieved");
   } catch (error) {
     next(error);
   }
@@ -466,6 +513,7 @@ module.exports = {
   analyzeMeal,
   commitMeal,
   listMeals,
+  getMealHistory,
   getMealSummary,
   getMealById,
   updateMeal,

@@ -1,12 +1,26 @@
-const fs = require("fs");
-const path = require("path");
 const crypto = require("crypto");
+const storage = require("../services/storage");
+const {
+  S3Client,
+  CopyObjectCommand,
+  DeleteObjectCommand,
+} = require("@aws-sdk/client-s3");
 
-// Local-disk storage for meal images. Same interface shape as reportStorage —
-// swap the internals for an S3/R2 client at deploy time and nothing else
-// needs to change. Keys are uuid-prefixed and carry their own path segment
-// so the driver doesn't need to remember the prefix layout.
-const BASE_DIR = process.env.MEAL_STORAGE_DIR || path.join("uploads", "meal-images");
+/**
+ * Meal-image storage, backed by Cloudflare R2.
+ *
+ * Layout mirrors the previous disk layout so the mealController doesn't need
+ * to know about cloud storage:
+ *   meals/pending/<userId>/<timestamp>-<hash8>.<ext>
+ *   meals/committed/<userId>/<timestamp>-<hash8>.<ext>
+ *
+ * Pending images are uploaded when the user calls analyzeMeal; they get
+ * promoted to committed when they commitMeal. Orphans in pending/ can be
+ * swept by a GC job.
+ *
+ * Note: save() and promote() are now async (they make network calls). The
+ * controller must await them. remove() is fire-and-forget async.
+ */
 
 function extFromMime(mime) {
   if (mime === "image/jpeg" || mime === "image/jpg") return ".jpg";
@@ -15,54 +29,126 @@ function extFromMime(mime) {
   return "";
 }
 
-function ensureDir(dirAbs) {
-  fs.mkdirSync(dirAbs, { recursive: true });
+function shortHash(buffer) {
+  return crypto.createHash("sha256").update(buffer).digest("hex").slice(0, 12);
+}
+
+function pendingKey({ userId, timestamp, hash, mimeType }) {
+  return `meals/pending/${userId}/${timestamp}-${hash}${extFromMime(mimeType)}`;
+}
+
+function committedKeyFor(pending) {
+  // "meals/pending/<uid>/<name>" -> "meals/committed/<uid>/<name>"
+  return pending.replace("/pending/", "/committed/");
 }
 
 /**
- * Write `buffer` to the pending area. Returns an opaque key
- * like "meal-images/pending/<uuid>.jpg".
+ * Upload a meal image buffer to pending/. Returns the R2 key.
+ * The key shape matches meals/pending/<userId>/<timestamp>-<hash8>.<ext>.
+ *
+ * Takes optional `userId` so orphans can be attributed. Falls back to
+ * "anon" if the caller didn't thread it through.
  */
-function save(buffer, mimeType) {
-  const pendingDir = path.join(BASE_DIR, "pending");
-  ensureDir(pendingDir);
-  const name = `${crypto.randomUUID()}${extFromMime(mimeType)}`;
-  fs.writeFileSync(path.join(pendingDir, name), buffer);
-  return path.join("meal-images", "pending", name);
+async function save(buffer, mimeType, userId = "anon") {
+  const key = pendingKey({
+    userId,
+    timestamp: Date.now(),
+    hash: shortHash(buffer),
+    mimeType,
+  });
+  await storage.uploadBuffer(key, buffer, mimeType);
+  return key;
 }
 
 /**
- * Move an image from pending/ to committed/. Returns the new key.
- * Throws if the source file doesn't exist.
+ * Move a pending key to committed. R2 doesn't have a rename, so we
+ * CopyObject then DeleteObject. Returns the new committed key.
+ *
+ * Throws if the source object doesn't exist (mirrors the old fs.renameSync
+ * ENOENT behavior).
  */
-function promote(key) {
+async function promote(key) {
   if (!key || !key.includes("/pending/")) {
     throw new Error(`promote() expected a pending/ key, got: ${key}`);
   }
-  const name = path.basename(key);
-  const fromAbs = path.join(BASE_DIR, "pending", name);
-  const committedDir = path.join(BASE_DIR, "committed");
-  ensureDir(committedDir);
-  const toAbs = path.join(committedDir, name);
-  fs.renameSync(fromAbs, toAbs);
-  return path.join("meal-images", "committed", name);
+  const client = _rawClient();
+  const bucket = process.env.R2_BUCKET;
+  const newKey = committedKeyFor(key);
+
+  await client.send(
+    new CopyObjectCommand({
+      Bucket: bucket,
+      CopySource: `${bucket}/${encodeURIComponent(key)}`,
+      Key: newKey,
+    })
+  );
+  // Best-effort cleanup of the pending copy. If this fails the GC will
+  // catch it later — don't block the commit.
+  try {
+    await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+  } catch (err) {
+    console.warn(`[mealStorage] Failed to delete pending ${key}: ${err.message}`);
+  }
+  return newKey;
 }
 
-/** Non-throwing delete. */
-function remove(key) {
+/** Non-throwing async delete. */
+async function remove(key) {
   if (!key) return;
   try {
-    fs.unlinkSync(pathFor(key));
-  } catch (_) {}
+    await storage.deleteObject(key);
+  } catch (err) {
+    console.warn(`[mealStorage] Failed to remove ${key}: ${err.message}`);
+  }
 }
 
-/** Resolve a key back to an absolute filesystem path. */
-function pathFor(key) {
+/**
+ * Legacy shim — callers use this to check "does the pending file exist?".
+ * We answer yes iff the R2 object exists. Returns a promise that resolves
+ * to a truthy value when the object is present.
+ *
+ * Kept named pathFor to minimise churn at call sites; the old meaning (a
+ * filesystem path) no longer applies.
+ */
+async function pathFor(key) {
   if (!key) return null;
-  // key looks like "meal-images/pending/xxx.jpg" or "meal-images/committed/xxx.jpg"
-  // Strip the leading "meal-images/" since BASE_DIR already ends there.
-  const relative = key.startsWith("meal-images/") ? key.slice("meal-images/".length) : key;
-  return path.join(BASE_DIR, relative);
+  const exists = await storage.keyExists(key);
+  return exists ? key : null;
 }
 
-module.exports = { save, promote, remove, pathFor, BASE_DIR };
+/** Public URL for a stored image. Null if public access isn't configured. */
+function publicUrlFor(key) {
+  return storage.getPublicUrl(key);
+}
+
+/** Short-lived signed URL for private access. */
+async function signedUrlFor(key, expiresIn = 3600) {
+  if (!key) return null;
+  return storage.getSignedUrl(key, expiresIn);
+}
+
+// Internal: builds a raw S3 client for operations not covered by services/storage.
+// We can't reach into that module's cached client, so we mirror its config.
+function _rawClient() {
+  const { R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY } = process.env;
+  if (!R2_ACCOUNT_ID || !R2_ACCESS_KEY_ID || !R2_SECRET_ACCESS_KEY) {
+    throw new Error("R2 storage is not configured (check .env)");
+  }
+  return new S3Client({
+    region: "auto",
+    endpoint: `https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+    credentials: {
+      accessKeyId: R2_ACCESS_KEY_ID,
+      secretAccessKey: R2_SECRET_ACCESS_KEY,
+    },
+  });
+}
+
+module.exports = {
+  save,
+  promote,
+  remove,
+  pathFor,
+  publicUrlFor,
+  signedUrlFor,
+};
