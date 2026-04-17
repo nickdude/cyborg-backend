@@ -16,9 +16,27 @@ const agentRoutes = require("./routes/agentRoutes");
 
 const app = express();
 
-// CORS Configuration for file uploads
+// CORS: allowlist from env (comma-separated). In dev, falls back to reflecting
+// any origin so local tooling + mobile emulators work. In production, FRONTEND_ORIGINS
+// must be set explicitly.
+const allowedOrigins = (process.env.FRONTEND_ORIGINS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+const isProd = process.env.NODE_ENV === "production";
+
+if (isProd && allowedOrigins.length === 0) {
+  throw new Error("FRONTEND_ORIGINS must be set in production");
+}
+
 const corsOptions = {
-  origin: true, // Allow all origins (can be restricted later)
+  origin: (origin, cb) => {
+    // Allow non-browser requests (curl, server-to-server) which have no Origin
+    if (!origin) return cb(null, true);
+    if (!isProd && allowedOrigins.length === 0) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error(`CORS: origin ${origin} not allowed`));
+  },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
