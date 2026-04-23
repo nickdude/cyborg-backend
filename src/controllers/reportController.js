@@ -277,6 +277,13 @@ const uploadReport = async (req, res, next) => {
       $addToSet: { bloodReports: reportData._id },
     });
 
+    // Trigger goals + action plan generation in background (fire-and-forget)
+    const { triggerGoalsAndActionPlan } = require("../services/actionPlanGenerator");
+    const ActionPlan = require("../models/ActionPlan");
+    ActionPlan.create({ userId: req.user.id, reportId: reportData._id, status: "pending" })
+      .then((plan) => triggerGoalsAndActionPlan(req.user.id, reportData._id, plan._id))
+      .catch((err) => console.error(`[ActionPlan] bg-gen trigger failed: ${err.message}`));
+
     res.sendSuccess(
       {
         _id: reportData._id,
@@ -302,28 +309,46 @@ const uploadReport = async (req, res, next) => {
  */
 const listReports = async (req, res, next) => {
   try {
-    const reports = await ReportData.find({ userId: req.user.id })
-      .select(
-        "filename sourceUrl parsedData reportDate reportLabel biomarkerPanel createdAt"
-      )
-      .sort({ reportDate: -1, createdAt: -1 })
-      .lean();
+    const ActionPlan = require("../models/ActionPlan");
 
-    const result = reports.map((r) => ({
-      _id: r._id,
-      filename: r.filename || r.sourceUrl,
-      sourceUrl: r.sourceUrl && /^https?:\/\//i.test(r.sourceUrl) ? r.sourceUrl : null,
-      reportDate: r.reportDate || r.createdAt,
-      reportLabel: r.reportLabel || "",
-      flaggedCount:
-        r.biomarkerPanel?.filter(
-          (t) => t.numericValue !== null && t.flag !== "normal"
-        ).length || 0,
-      testCount:
-        r.biomarkerPanel?.filter((t) => t.numericValue !== null).length || 0,
-      parsedData: r.parsedData,
-      uploadedAt: r.createdAt,
-    }));
+    const [reports, actionPlans] = await Promise.all([
+      ReportData.find({ userId: req.user.id })
+        .select(
+          "filename sourceUrl parsedData reportDate reportLabel biomarkerPanel createdAt"
+        )
+        .sort({ reportDate: -1, createdAt: -1 })
+        .lean(),
+      ActionPlan.find({ userId: req.user.id })
+        .select("reportId status")
+        .lean(),
+    ]);
+
+    const planMap = {};
+    for (const plan of actionPlans) {
+      planMap[plan.reportId.toString()] = { _id: plan._id, status: plan.status };
+    }
+
+    const result = reports.map((r) => {
+      const plan = planMap[r._id.toString()];
+      return {
+        _id: r._id,
+        filename: r.filename || r.sourceUrl,
+        sourceUrl: r.sourceUrl && /^https?:\/\//i.test(r.sourceUrl) ? r.sourceUrl : null,
+        reportDate: r.reportDate || r.createdAt,
+        reportLabel: r.reportLabel || "",
+        flaggedCount:
+          r.biomarkerPanel?.filter(
+            (t) => t.numericValue !== null && t.flag !== "normal"
+          ).length || 0,
+        testCount:
+          r.biomarkerPanel?.filter((t) => t.numericValue !== null).length || 0,
+        parsedData: r.parsedData,
+        uploadedAt: r.createdAt,
+        actionPlan: plan ? true : false,
+        actionPlanId: plan?._id || null,
+        actionPlanStatus: plan?.status || null,
+      };
+    });
 
     res.sendSuccess(result, "Reports retrieved successfully");
   } catch (error) {

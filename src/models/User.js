@@ -149,6 +149,10 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    actionPlanReady: {
+      type: Boolean,
+      default: false,
+    },
 
     // Profile
     profilePicture: String,

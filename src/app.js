@@ -13,6 +13,7 @@ const chatRoutes = require("./routes/chatRoutes");
 const doctorRoutes = require("./routes/doctorRoutes");
 const goalRoutes = require("./routes/goalRoutes");
 const agentRoutes = require("./routes/agentRoutes");
+const actionPlanRoutes = require("./routes/actionPlanRoutes");
 
 const app = express();
 
@@ -85,6 +86,9 @@ app.use("/api/goals", goalRoutes);
 
 // Agent Routes (server-to-server)
 app.use("/api/agent", agentRoutes);
+
+// Action Plan Routes
+app.use("/api/action-plans", actionPlanRoutes);
 
 // 404 handler
 app.use((req, res) => {
