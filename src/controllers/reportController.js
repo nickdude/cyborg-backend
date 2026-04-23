@@ -278,10 +278,19 @@ const uploadReport = async (req, res, next) => {
     });
 
     // Trigger goals + action plan generation in background (fire-and-forget)
+    // Uses atomic upsert to prevent duplicate plans on concurrent uploads
     const { triggerGoalsAndActionPlan } = require("../services/actionPlanGenerator");
     const ActionPlan = require("../models/ActionPlan");
-    ActionPlan.create({ userId: req.user.id, reportId: reportData._id, status: "pending" })
-      .then((plan) => triggerGoalsAndActionPlan(req.user.id, reportData._id, plan._id))
+    ActionPlan.findOneAndUpdate(
+      { userId: req.user.id, reportId: reportData._id },
+      { $setOnInsert: { status: "pending" } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    )
+      .then((plan) => {
+        if (plan.status === "pending") {
+          return triggerGoalsAndActionPlan(req.user.id, reportData._id, plan._id);
+        }
+      })
       .catch((err) => console.error(`[ActionPlan] bg-gen trigger failed: ${err.message}`));
 
     res.sendSuccess(

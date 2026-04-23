@@ -7,55 +7,31 @@ const Notification = require("../models/Notification");
 const { detectIssues } = require("../utils/issueDetector");
 const { generateGoals } = require("../utils/goalGenerator");
 const { generateNarratives } = require("../prompts/goalNarrative");
+const { buildPatientContext } = require("../utils/goalHelpers");
 const { computeDeltas } = require("./deltaTracker");
 const { generateProtocol } = require("../prompts/actionPlanProtocol");
 
-function buildPatientContext(user, reportData) {
-  const od = user.onboardingData || {};
-  const scores = reportData?.scores || {};
+const AI_CALL_TIMEOUT_MS = 120_000;
 
-  let age = null;
-  const dob = user.dateOfBirth || od.dateOfBirth;
-  if (dob) {
-    const dobDate = new Date(dob);
-    age = Math.floor(
-      (Date.now() - dobDate.getTime()) / (365.25 * 24 * 60 * 60 * 1000)
-    );
-  }
-
-  return {
-    name: user.firstName || od.name || "Member",
-    age,
-    sex: od.sex || null,
-    conditions: od.conditions || [],
-    medications: od.medications || [],
-    allergies: od.allergies || [],
-    supplements: od.supplements || [],
-    diet: od.diet || "",
-    exerciseFreq: od.exerciseFreq || "",
-    exerciseTypes: od.exerciseTypes || [],
-    sleepHours: od.sleepHours || "",
-    sleepQuality: od.sleepQuality || "",
-    smoking: od.smoking || "",
-    alcohol: od.alcohol || "",
-    goals: od.goals || [],
-    focusAreas: od.focusAreas || [],
-    familyHistory: od.familyHistory || [],
-    technicalLevel: od.technicalLevel || "standard",
-    superpowerScore: scores.cyborgScore?.score ?? null,
-    bioAge: scores.bioAge?.bioAge ?? null,
-    categoryGrades: scores.categoryGrades || {},
-  };
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+    ),
+  ]);
 }
 
-function mergeGoalsWithNarratives(goalSkeletons, narratives) {
+function mapSkeletonsToBiomarkerEvidence(goalSkeletons, narratives) {
   const narrativeMap = {};
   for (const n of narratives) {
     narrativeMap[n.goalId] = n;
   }
 
   return goalSkeletons.map((skeleton) => {
-    const narrative = narrativeMap[skeleton.goalId] || {};
+    const narrative = narrativeMap[skeleton.goalId];
+    const hasNarrative = narrative != null;
+
     return {
       goalId: skeleton.goalId,
       title: skeleton.title,
@@ -63,10 +39,10 @@ function mergeGoalsWithNarratives(goalSkeletons, narratives) {
       healthImpact: skeleton.healthImpact,
       category: skeleton.category || "",
       recoveryTimeWeeks: skeleton.recoveryTimeWeeks || [],
-      description: narrative.summary || "",
-      whatThisMeans: narrative.whatThisMeans || "",
-      potentialCauses: narrative.potentialCauses || "",
-      recommendedActions: narrative.recommendedActions || [],
+      description: hasNarrative ? narrative.summary || "" : "",
+      whatThisMeans: hasNarrative ? narrative.whatThisMeans || "" : "",
+      potentialCauses: hasNarrative ? narrative.potentialCauses || "" : "",
+      recommendedActions: hasNarrative ? narrative.recommendedActions || [] : [],
       biomarkerEvidence: (skeleton.biomarkersToImprove || []).map((bm) => ({
         name: bm.displayName || bm.canonicalName,
         canonicalName: bm.canonicalName,
@@ -83,6 +59,7 @@ function mergeGoalsWithNarratives(goalSkeletons, narratives) {
         dosing: pi.dosing,
         triggerBiomarkers: pi.triggerBiomarkers || [],
       })),
+      _narrativeMissing: !hasNarrative,
     };
   });
 }
@@ -97,13 +74,7 @@ function buildHealthReport(reportData) {
   for (const bm of panel) {
     const flag = (bm.optimalFlag || bm.flag || "").toLowerCase();
     if (flag === "optimal") optimal++;
-    else if (
-      flag === "out of range" ||
-      flag === "elevated" ||
-      flag === "low" ||
-      flag === "high" ||
-      flag === "critical"
-    )
+    else if (["out of range", "elevated", "low", "high", "critical"].includes(flag))
       outOfRange++;
     else inRange++;
   }
@@ -114,20 +85,14 @@ function buildHealthReport(reportData) {
       phenoAge: scores.bioAge?.bioAge ?? null,
       delta: scores.bioAge?.delta ?? null,
     },
-    markerCounts: {
-      total: panel.length,
-      optimal,
-      inRange,
-      outOfRange,
-    },
+    markerCounts: { total: panel.length, optimal, inRange, outOfRange },
     categoryGrades: scores.categoryGrades || null,
   };
 }
 
 function buildOverview(user, reportData) {
-  const name = user.firstName || "Member";
   return {
-    intro: `This action plan is created using your blood tests, health intake survey, and AI-assisted clinical review to help optimize your health and future goals.`,
+    intro: "This action plan is created using your blood tests, health intake survey, and AI-assisted clinical review to help optimize your health and future goals.",
     dataSources: [
       `Blood test (${reportData.filename || "uploaded report"})`,
       "Health intake survey responses",
@@ -137,20 +102,11 @@ function buildOverview(user, reportData) {
 }
 
 function buildPlanJson(plan, goals) {
-  const monitoredIssues = goals.map((g) => ({
-    title: g.title,
-    priority: g.priority,
-    description: g.whatThisMeans || g.description,
-    actions: (g.recommendedActions || []).map(
-      (a) => `${a.label} ${a.detail}`
-    ),
-  }));
-
   return {
     summary: plan.overview?.intro || "",
-    recommendations: monitoredIssues.map((issue) => ({
-      title: issue.title,
-      items: issue.actions,
+    recommendations: goals.map((g) => ({
+      title: g.title,
+      items: (g.recommendedActions || []).map((a) => `${a.label} ${a.detail}`),
     })),
     labsReviewed: {
       fileName: plan.reportFilename || "",
@@ -158,6 +114,56 @@ function buildPlanJson(plan, goals) {
     },
   };
 }
+
+// ── Step runners ──────────────────────────────────────────────────
+
+async function gatherInputs(userId, reportId) {
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  const [reportData, user, previousGoals, previousPlan, wearableData] =
+    await Promise.all([
+      ReportData.findById(reportId).lean(),
+      User.findById(userId)
+        .select("firstName lastName dateOfBirth onboardingData")
+        .lean(),
+      Goal.find({ userId }).sort({ createdAt: -1 }).limit(8).lean(),
+      ActionPlan.findOne({ userId, status: "ready" }).sort({ createdAt: -1 }).lean(),
+      WearableData.find({ userId, date: { $gte: thirtyDaysAgo } }).lean(),
+    ]);
+
+  if (!reportData) throw new Error("Report not found");
+
+  const biomarkerPanel = reportData.biomarkerPanel || [];
+  if (biomarkerPanel.length === 0) throw new Error("Report has no biomarker data");
+
+  return { reportData, user, previousGoals, previousPlan, wearableData, biomarkerPanel };
+}
+
+function runGoalsPipeline(biomarkerPanel, onboardingData, wearableData) {
+  const detectedIssues = detectIssues(biomarkerPanel, onboardingData, wearableData);
+  console.log(`[ActionPlan] Detected ${detectedIssues.length} issues`);
+
+  const goalSkeletons = generateGoals(detectedIssues, onboardingData, biomarkerPanel);
+  console.log(`[ActionPlan] Generated ${goalSkeletons.length} goal skeletons`);
+
+  return { detectedIssues, goalSkeletons };
+}
+
+async function saveGoals(goalsWithDeltas, userId, reportId) {
+  const saved = [];
+  for (const goal of goalsWithDeltas) {
+    const doc = await Goal.findOneAndUpdate(
+      { reportId, goalId: goal.goalId },
+      { userId, reportId, ...goal },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    saved.push(doc);
+  }
+  return saved;
+}
+
+// ── Main orchestrator ─────────────────────────────────────────────
 
 async function triggerGoalsAndActionPlan(userId, reportId, planId) {
   try {
@@ -168,84 +174,49 @@ async function triggerGoalsAndActionPlan(userId, reportId, planId) {
 
     console.log(`[ActionPlan] Starting generation for user=${userId} report=${reportId}`);
 
-    // Step 1: Gather inputs in parallel
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-
-    const [reportData, user, previousGoals, previousPlan, wearableData] =
-      await Promise.all([
-        ReportData.findById(reportId).lean(),
-        User.findById(userId)
-          .select("firstName lastName dateOfBirth onboardingData")
-          .lean(),
-        Goal.find({ userId })
-          .sort({ createdAt: -1 })
-          .limit(8)
-          .lean(),
-        ActionPlan.findOne({ userId, status: "ready" })
-          .sort({ createdAt: -1 })
-          .lean(),
-        WearableData.find({ userId, date: { $gte: thirtyDaysAgo } }).lean(),
-      ]);
-
-    if (!reportData) {
-      throw new Error("Report not found");
-    }
-
-    const biomarkerPanel = reportData.biomarkerPanel || [];
-    if (biomarkerPanel.length === 0) {
-      throw new Error("Report has no biomarker data");
-    }
+    // Step 1: Gather inputs
+    const { reportData, user, previousGoals, previousPlan, wearableData, biomarkerPanel } =
+      await gatherInputs(userId, reportId);
 
     const onboardingData = user?.onboardingData || {};
 
-    // Step 2: Run goals pipeline (Layer 1 + 2)
-    console.log("[ActionPlan] Running issue detection...");
-    const detectedIssues = detectIssues(biomarkerPanel, onboardingData, wearableData);
-    console.log(`[ActionPlan] Detected ${detectedIssues.length} issues`);
+    // Step 2: Run goals pipeline
+    const { goalSkeletons } = runGoalsPipeline(biomarkerPanel, onboardingData, wearableData);
 
-    console.log("[ActionPlan] Generating goal skeletons...");
-    const goalSkeletons = generateGoals(detectedIssues, onboardingData, biomarkerPanel);
-    console.log(`[ActionPlan] Generated ${goalSkeletons.length} goal skeletons`);
-
-    // Step 3: AI Call 1 — generate narratives
+    // Step 3: AI Call 1 — generate narratives (with timeout)
     console.log("[ActionPlan] Generating AI narratives...");
     const patientContext = buildPatientContext(user, reportData);
-    const narratives = await generateNarratives(goalSkeletons, patientContext);
+    const narratives = await withTimeout(
+      generateNarratives(goalSkeletons, patientContext),
+      AI_CALL_TIMEOUT_MS,
+      "Narrative generation"
+    );
 
-    // Step 4: Merge skeletons + narratives
-    const mergedGoals = mergeGoalsWithNarratives(goalSkeletons, narratives);
+    // Step 4: Merge skeletons + narratives into full goals with biomarker evidence
+    const mergedGoals = mapSkeletonsToBiomarkerEvidence(goalSkeletons, narratives);
 
     // Step 5: Compute deltas vs previous goals
-    const { goals: goalsWithDeltas, resolvedGoalIds } = computeDeltas(
-      mergedGoals,
-      previousGoals
-    );
+    const { goals: goalsWithDeltas } = computeDeltas(mergedGoals, previousGoals);
 
-    // Step 6: Save Goal documents
+    // Step 6: Save Goal documents (sequential to avoid hammering DB)
     console.log(`[ActionPlan] Saving ${goalsWithDeltas.length} goals...`);
-    const savedGoals = await Promise.all(
-      goalsWithDeltas.map((goal) =>
-        Goal.findOneAndUpdate(
-          { reportId, goalId: goal.goalId },
-          { userId, reportId, ...goal },
-          { upsert: true, new: true, setDefaultsOnInsert: true }
-        )
-      )
-    );
-
+    const savedGoals = await saveGoals(goalsWithDeltas, userId, reportId);
     const goalIds = savedGoals.map((g) => g._id);
 
-    // Step 7: AI Call 2 — generate protocol + next steps
+    // Step 7: AI Call 2 — generate protocol + next steps (with timeout)
     console.log("[ActionPlan] Generating protocol...");
     const allProtocolItems = goalsWithDeltas.flatMap((g) => g.protocolItems || []);
-    const protocolResult = await generateProtocol({
-      patientContext,
-      goals: goalsWithDeltas,
-      protocolItems: allProtocolItems,
-      scores: reportData.scores,
-      previousProtocol: previousPlan?.protocol || null,
-    });
+    const protocolResult = await withTimeout(
+      generateProtocol({
+        patientContext,
+        goals: goalsWithDeltas,
+        protocolItems: allProtocolItems,
+        scores: reportData.scores,
+        previousProtocol: previousPlan?.protocol || null,
+      }),
+      AI_CALL_TIMEOUT_MS,
+      "Protocol generation"
+    );
 
     // Step 8: Assemble full plan
     const overview = buildOverview(user, reportData);
@@ -273,7 +244,6 @@ async function triggerGoalsAndActionPlan(userId, reportId, planId) {
       generatedAt: new Date(),
     };
 
-    // Build planJson for backward compat with current frontend
     planUpdate.planJson = buildPlanJson(
       { ...planUpdate, reportFilename: reportData.filename, reportUploadedAt: reportData.createdAt },
       goalsWithDeltas
@@ -281,10 +251,8 @@ async function triggerGoalsAndActionPlan(userId, reportId, planId) {
 
     await ActionPlan.findByIdAndUpdate(planId, planUpdate);
 
-    // Step 9: Update user flags
+    // Step 9: Update user flags + notify
     await User.findByIdAndUpdate(userId, { actionPlanReady: true });
-
-    // Step 10: Send notification
     await Notification.create({
       userId,
       type: "action_plan_ready",

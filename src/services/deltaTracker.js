@@ -13,7 +13,11 @@ function distanceFromOptimal(biomarker) {
 
   if (value >= oMin && value <= oMax) return 0;
 
-  const range = oMax - oMin || 1;
+  // Use reference range as denominator for normalization; fall back to absolute distance
+  const range = Math.abs(oMax - oMin);
+  if (range === 0) {
+    return Math.abs(value - oMin);
+  }
   if (value < oMin) return (oMin - value) / range;
   return (value - oMax) / range;
 }
