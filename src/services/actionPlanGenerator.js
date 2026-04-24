@@ -68,24 +68,36 @@ function buildHealthReport(reportData) {
   const scores = reportData.scores || {};
   const panel = reportData.biomarkerPanel || [];
 
+  // Only count biomarkers with actual numeric values (tested)
+  const tested = panel.filter((bm) => bm.numericValue != null);
+
   let optimal = 0;
   let inRange = 0;
   let outOfRange = 0;
-  for (const bm of panel) {
-    const flag = (bm.optimalFlag || bm.flag || "").toLowerCase();
-    if (flag === "optimal") optimal++;
-    else if (["out of range", "elevated", "low", "high", "critical"].includes(flag))
+  for (const bm of tested) {
+    const optFlag = (bm.optimalFlag || "").toLowerCase();
+    const flag = (bm.flag || "").toLowerCase();
+
+    if (optFlag === "optimal") {
+      optimal++;
+    } else if (
+      flag === "high" || flag === "low" ||
+      flag === "critical_high" || flag === "critical_low" ||
+      optFlag === "out of range"
+    ) {
       outOfRange++;
-    else inRange++;
+    } else {
+      inRange++;
+    }
   }
 
   return {
-    cyborgScore: scores.cyborgScore?.score ?? null,
+    cyborgScore: scores.cyborgScore?.final ?? scores.cyborgScore?.score ?? null,
     bioAge: {
       phenoAge: scores.bioAge?.bioAge ?? null,
       delta: scores.bioAge?.delta ?? null,
     },
-    markerCounts: { total: panel.length, optimal, inRange, outOfRange },
+    markerCounts: { total: tested.length, optimal, inRange, outOfRange },
     categoryGrades: scores.categoryGrades || null,
   };
 }

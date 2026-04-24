@@ -673,6 +673,9 @@ const CANONICAL_MAP = {
     optimalMin: 600,
     optimalMax: 900,
     panelTag: 'Core Panel',
+    sexRanges: {
+      female: { defaultRefMin: 15, defaultRefMax: 70, optimalMin: 20, optimalMax: 50 },
+    },
   },
   testosterone_free: {
     displayName: 'Free Testosterone',
@@ -685,6 +688,9 @@ const CANONICAL_MAP = {
     optimalMin: 130,
     optimalMax: 250,
     panelTag: 'Core Panel',
+    sexRanges: {
+      female: { defaultRefMin: 0.3, defaultRefMax: 3.2, optimalMin: 1.0, optimalMax: 2.5 },
+    },
   },
   testosterone_bioavailable: {
     displayName: 'Bioavailable Testosterone',
@@ -697,6 +703,9 @@ const CANONICAL_MAP = {
     optimalMin: 150,
     optimalMax: 250,
     panelTag: 'Core Panel',
+    sexRanges: {
+      female: { defaultRefMin: 2, defaultRefMax: 18, optimalMin: 5, optimalMax: 15 },
+    },
   },
   shbg: {
     displayName: 'SHBG',
@@ -709,6 +718,9 @@ const CANONICAL_MAP = {
     optimalMin: 20,
     optimalMax: 40,
     panelTag: 'Core Panel',
+    sexRanges: {
+      female: { defaultRefMin: 18, defaultRefMax: 144, optimalMin: 30, optimalMax: 80 },
+    },
   },
   estradiol: {
     displayName: 'Estradiol (E2)',
@@ -721,6 +733,9 @@ const CANONICAL_MAP = {
     optimalMin: 20,
     optimalMax: 30,
     panelTag: 'Core Panel',
+    sexRanges: {
+      female: { defaultRefMin: 15, defaultRefMax: 350, optimalMin: 50, optimalMax: 200 },
+    },
   },
   dhea_s: {
     displayName: 'DHEA-S',
@@ -733,6 +748,9 @@ const CANONICAL_MAP = {
     optimalMin: 200,
     optimalMax: 400,
     panelTag: 'Core Panel',
+    sexRanges: {
+      female: { defaultRefMin: 35, defaultRefMax: 430, optimalMin: 100, optimalMax: 300 },
+    },
   },
   te2_ratio: {
     displayName: 'T:E2 Ratio',
@@ -755,12 +773,13 @@ const CANONICAL_MAP = {
     conversions: {},
     defaultRefMin: null,
     defaultRefMax: null,
-    // Sex-dependent: M optimal ≥50, F optimal 1–5. Using male defaults here;
-    // sex-specific interpretation should happen in the scoring engine.
     optimalMin: 50,
     optimalMax: null,
     panelTag: 'Derived',
     isDerived: true,
+    sexRanges: {
+      female: { optimalMin: 1, optimalMax: 5 },
+    },
   },
   fsh: {
     displayName: 'FSH',
@@ -773,6 +792,9 @@ const CANONICAL_MAP = {
     optimalMin: 3,
     optimalMax: 10,
     panelTag: 'Advanced',
+    sexRanges: {
+      female: { defaultRefMin: 3, defaultRefMax: 20, optimalMin: 3, optimalMax: 10 },
+    },
   },
   lh: {
     displayName: 'LH',
@@ -785,6 +807,9 @@ const CANONICAL_MAP = {
     optimalMin: 2,
     optimalMax: 9,
     panelTag: 'Advanced',
+    sexRanges: {
+      female: { defaultRefMin: 2, defaultRefMax: 15, optimalMin: 2, optimalMax: 12 },
+    },
   },
   progesterone: {
     displayName: 'Progesterone',
@@ -797,6 +822,9 @@ const CANONICAL_MAP = {
     optimalMin: 5,
     optimalMax: 20,
     panelTag: 'Advanced',
+    sexRanges: {
+      female: { defaultRefMin: 0.1, defaultRefMax: 25, optimalMin: 5, optimalMax: 20 },
+    },
   },
   prolactin: {
     displayName: 'Prolactin',
@@ -809,6 +837,9 @@ const CANONICAL_MAP = {
     optimalMin: 2,
     optimalMax: 15,
     panelTag: 'Advanced',
+    sexRanges: {
+      female: { defaultRefMin: null, defaultRefMax: 29, optimalMin: 3, optimalMax: 20 },
+    },
   },
   amh: {
     displayName: 'AMH',
@@ -1007,11 +1038,14 @@ const CANONICAL_MAP = {
     aliases: ['hemoglobin', 'hgb', 'hb', 'haemoglobin'],
     defaultUnit: 'g/dL',
     conversions: { 'g/L': v => v / 10 },
-    defaultRefMin: 12.0,
+    defaultRefMin: 13.5,
     defaultRefMax: 17.5,
-    optimalMin: 13.0,
+    optimalMin: 14.0,
     optimalMax: 17.0,
     panelTag: 'Core Panel',
+    sexRanges: {
+      female: { defaultRefMin: 12.0, defaultRefMax: 16.0, optimalMin: 12.5, optimalMax: 15.5 },
+    },
   },
   hematocrit: {
     displayName: 'Hematocrit',
@@ -1019,11 +1053,14 @@ const CANONICAL_MAP = {
     aliases: ['hematocrit', 'hct', 'haematocrit', 'packed cell volume', 'pcv'],
     defaultUnit: '%',
     conversions: {},
-    defaultRefMin: 36,
+    defaultRefMin: 38.3,
     defaultRefMax: 53,
-    optimalMin: 37,
+    optimalMin: 40,
     optimalMax: 48,
     panelTag: 'Core Panel',
+    sexRanges: {
+      female: { defaultRefMin: 35.5, defaultRefMax: 44.9, optimalMin: 36, optimalMax: 44 },
+    },
   },
   rbc: {
     displayName: 'RBC',
@@ -1276,11 +1313,14 @@ const CANONICAL_MAP = {
     aliases: ['ferritin', 'serum ferritin', 'ferritin, serum'],
     defaultUnit: 'ng/mL',
     conversions: { 'ug/L': v => v },
-    defaultRefMin: 12,
+    defaultRefMin: 20,
     defaultRefMax: 300,
     optimalMin: 50,
     optimalMax: 200,
     panelTag: 'Core Panel',
+    sexRanges: {
+      female: { defaultRefMin: 12, defaultRefMax: 150, optimalMin: 40, optimalMax: 100 },
+    },
   },
   sii: {
     displayName: 'SII',
@@ -1904,7 +1944,25 @@ function determineOptimalFlag(value, entry) {
  * @param {Object} parsedData - The parsedData from a ReportData doc
  * @returns {Array} normalizedTests
  */
-function normalizeTests(parsedData) {
+/**
+ * Resolve sex-specific ranges for a biomarker entry.
+ * Falls back to default ranges when sex is unknown or no override exists.
+ */
+function resolveSexRanges(entry, sex) {
+  if (!entry) return { refMin: null, refMax: null, optMin: null, optMax: null }
+
+  const sexKey = sex?.toLowerCase() === 'female' ? 'female' : null
+  const override = sexKey && entry.sexRanges?.[sexKey]
+
+  return {
+    refMin: override?.defaultRefMin ?? entry.defaultRefMin ?? null,
+    refMax: override?.defaultRefMax ?? entry.defaultRefMax ?? null,
+    optMin: override?.optimalMin ?? entry.optimalMin ?? null,
+    optMax: override?.optimalMax ?? entry.optimalMax ?? null,
+  }
+}
+
+function normalizeTests(parsedData, sex) {
   if (!parsedData) return []
 
   // Tests live in parsedData.tests[]. panels[] only groups them by name and
@@ -1946,10 +2004,16 @@ function normalizeTests(parsedData) {
       finalValue = Math.round(entry.conversions[unit](numericValue) * 100) / 100
     }
 
-    const refMin = parseNumericValue(test.referenceMin ?? test.refMin ?? test.normalMin) ?? entry?.defaultRefMin ?? null
-    const refMax = parseNumericValue(test.referenceMax ?? test.refMax ?? test.normalMax) ?? entry?.defaultRefMax ?? null
+    // Resolve sex-specific ranges (falls back to defaults for male/unknown)
+    const ranges = resolveSexRanges(entry, sex)
+
+    const refMin = parseNumericValue(test.referenceMin ?? test.refMin ?? test.normalMin) ?? ranges.refMin
+    const refMax = parseNumericValue(test.referenceMax ?? test.refMax ?? test.normalMax) ?? ranges.refMax
     const flag = test.flag || determineFlag(finalValue, refMin, refMax)
-    const optimalFlag = determineOptimalFlag(finalValue, entry)
+
+    // Build a virtual entry with resolved optimal ranges for optimalFlag computation
+    const resolvedEntry = entry ? { ...entry, optimalMin: ranges.optMin, optimalMax: ranges.optMax } : null
+    const optimalFlag = determineOptimalFlag(finalValue, resolvedEntry)
 
     normalized.push({
       canonicalName,
@@ -1959,8 +2023,8 @@ function normalizeTests(parsedData) {
       unit: entry?.defaultUnit || unit,
       referenceMin: refMin,
       referenceMax: refMax,
-      optimalMin: entry?.optimalMin ?? null,
-      optimalMax: entry?.optimalMax ?? null,
+      optimalMin: ranges.optMin,
+      optimalMax: ranges.optMax,
       flag,
       optimalFlag,
       panelTag: entry?.panelTag || 'Core Panel',
@@ -1971,4 +2035,4 @@ function normalizeTests(parsedData) {
 }
 
 
-module.exports = { CANONICAL_MAP, ALIAS_INDEX, matchCanonical, parseNumericValue, determineFlag, determineOptimalFlag, normalizeTests };
+module.exports = { CANONICAL_MAP, ALIAS_INDEX, matchCanonical, parseNumericValue, determineFlag, determineOptimalFlag, normalizeTests, resolveSexRanges };

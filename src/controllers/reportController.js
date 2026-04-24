@@ -199,8 +199,20 @@ const uploadReport = async (req, res, next) => {
       );
     }
 
-    // Normalize and compute biomarkers
-    const normalized = normalizeTests(parsedData);
+    // Fetch user sex for sex-aware biomarker ranges
+    const userDoc = await User.findById(req.user.id)
+      .select("dateOfBirth onboardingData onboardingAnswers biologicalSex")
+      .lean();
+    let sex = userDoc?.biologicalSex || userDoc?.onboardingData?.sex || null;
+    if (!sex && userDoc?.onboardingAnswers) {
+      const oa = await mongoose.connection.db
+        .collection("onboardinganswers")
+        .findOne({ _id: userDoc.onboardingAnswers });
+      sex = oa?.answers?.["1.3"] || null;
+    }
+
+    // Normalize and compute biomarkers (sex-aware optimal ranges)
+    const normalized = normalizeTests(parsedData, sex);
     const derived = computeDerivedBiomarkers(normalized);
     const allTests = [...normalized, ...derived];
     const biomarkerPanel = buildFullBiomarkerPanel(allTests);
@@ -209,16 +221,6 @@ const uploadReport = async (req, res, next) => {
     // Compute scores (non-blocking — report saves even if scoring fails)
     let scores = null;
     try {
-      const userDoc = await User.findById(req.user.id)
-        .select("dateOfBirth onboardingData onboardingAnswers")
-        .lean();
-      let sex = userDoc?.onboardingData?.sex || null;
-      if (!sex && userDoc?.onboardingAnswers) {
-        const oa = await mongoose.connection.db
-          .collection("onboardinganswers")
-          .findOne({ _id: userDoc.onboardingAnswers });
-        sex = oa?.answers?.["1.3"] || null;
-      }
       scores = computeScores(biomarkerPanel, {
         dateOfBirth: userDoc?.dateOfBirth,
         sex,
