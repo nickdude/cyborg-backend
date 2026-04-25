@@ -403,8 +403,26 @@ function detectIssues(biomarkerPanel, onboardingData, wearableData) {
     const wScore = computeWearableScore(template, wearableAgg)
     const sScore = computeSymptomScore(template, onboarding)
 
-    // DCS formula
-    const dcs = (labScore * 0.50) + (qScore * 0.25) + (wScore * 0.15) + (sScore * 0.10)
+    // Adaptive DCS: redistribute unused weight to lab when other signals are absent
+    const hasOnboarding = Object.keys(onboarding).length > 2
+    const hasWearable = wearableAgg && Object.keys(wearableAgg).length > 0
+    let labWeight = 0.50
+    let qWeight = 0.25
+    let wWeight = 0.15
+    let sWeight = 0.10
+    if (!hasOnboarding && !hasWearable) {
+      labWeight = 1.0
+      qWeight = 0
+      wWeight = 0
+      sWeight = 0
+    } else if (!hasWearable) {
+      labWeight = 0.65
+      qWeight = 0.25
+      wWeight = 0
+      sWeight = 0.10
+    }
+
+    const dcs = (labScore * labWeight) + (qScore * qWeight) + (wScore * wWeight) + (sScore * sWeight)
 
     // Check threshold
     if (dcs < template.threshold) continue

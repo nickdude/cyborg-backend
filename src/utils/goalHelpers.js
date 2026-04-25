@@ -62,7 +62,7 @@ function mergeGoalsWithNarratives(goalSkeletons, narratives) {
       whatThisMeans: hasNarrative ? narrative.whatThisMeans || "" : "",
       potentialCauses: hasNarrative ? narrative.potentialCauses || "" : "",
       recommendedActions: hasNarrative ? narrative.recommendedActions || [] : [],
-      biomarkersToImprove: skeleton.biomarkersToImprove,
+      biomarkerEvidence: skeleton.biomarkersToImprove,
       protocolItems: skeleton.protocolItems,
       contributingIssues: skeleton.contributingIssues,
       _narrativeMissing: !hasNarrative,

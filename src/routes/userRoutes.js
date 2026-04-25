@@ -67,6 +67,12 @@ router.get(
   reportController.getBiomarkerTimeline
 );
 
+router.get(
+  "/blood-reports/trends",
+  verifyToken,
+  reportController.getBiomarkerTrends
+);
+
 // Param-based routes after the specific ones
 router.post(
   "/:userId/blood-reports",

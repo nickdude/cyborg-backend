@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const mongoose = require("mongoose");
 const ReportData = require("../models/ReportData");
 const User = require("../models/User");
+const Notification = require("../models/Notification");
 const { pdfParserSystemPrompt } = require("../prompts/pdfParser");
 const { parseVision, extractJSON, getModelName } = require("../providers/ai");
 const { normalizeTests } = require("../utils/labNormalizer");
@@ -127,7 +128,149 @@ async function parseReportResilient({ buffer, mimeType, filename, userId }) {
 }
 
 /**
- * Upload and parse a blood report via vision AI
+ * Process a report in the background after the upload response has been sent.
+ * Handles: AI parsing, normalization, scoring, user updates, and notifications.
+ */
+async function processReportInBackground(userId, reportId, buffer, mimeType, filename) {
+  try {
+    // 1. Update status to 'analyzing'
+    await ReportData.findByIdAndUpdate(reportId, { status: "analyzing" });
+
+    // 2. Parse with vision AI (truncation-aware retry + JSON repair)
+    let parsedData, usage, truncated;
+    try {
+      const out = await parseReportResilient({
+        buffer,
+        mimeType,
+        filename,
+        userId,
+      });
+      parsedData = out.parsedData;
+      usage = out.usage;
+      truncated = out.truncated;
+    } catch (parseErr) {
+      console.error(
+        `[Reports] parse-error stage=${parseErr.dumpPath ? "dumped" : "no-dump"} code=${parseErr.code || "n/a"} file=${filename} user=${userId} dump=${parseErr.dumpPath || "none"} msg=${parseErr.message}`
+      );
+      console.error("[Reports] LLM parse failed", {
+        userId,
+        filename,
+        mimeType,
+        model: getModelName(),
+        code: parseErr.code || null,
+        rawLength: parseErr.rawLength ?? null,
+        rawSnippet: parseErr.rawSnippet ?? null,
+        dumpPath: parseErr.dumpPath ?? null,
+        message: parseErr.message,
+        stack: parseErr.stack,
+      });
+      throw parseErr;
+    }
+
+    // 3. Notify analysis complete
+    await Notification.create({
+      userId,
+      type: "analysis:ready",
+      metadata: { reportId },
+    });
+
+    // 4. Fetch user sex for sex-aware biomarker ranges
+    const userDoc = await User.findById(userId)
+      .select("dateOfBirth onboardingData onboardingAnswers biologicalSex")
+      .lean();
+    let sex = userDoc?.biologicalSex || userDoc?.onboardingData?.sex || null;
+    if (!sex && userDoc?.onboardingAnswers) {
+      const oa = await mongoose.connection.db
+        .collection("onboardinganswers")
+        .findOne({ _id: userDoc.onboardingAnswers });
+      sex = oa?.answers?.["1.3"] || null;
+    }
+
+    // 5. Normalize and compute biomarkers (sex-aware optimal ranges)
+    const normalized = normalizeTests(parsedData, sex);
+    const derived = computeDerivedBiomarkers(normalized);
+    const allTests = [...normalized, ...derived];
+    const biomarkerPanel = buildFullBiomarkerPanel(allTests);
+    const reportDate = extractReportDate(parsedData) || new Date();
+
+    // 6. Compute scores (non-blocking — report saves even if scoring fails)
+    let scores = null;
+    try {
+      scores = computeScores(biomarkerPanel, {
+        dateOfBirth: userDoc?.dateOfBirth,
+        sex,
+      });
+    } catch (err) {
+      console.error(
+        "[Reports] Scoring failed, saving report without scores:",
+        err.message
+      );
+    }
+
+    // 7. Update ReportData with parsed results
+    await ReportData.findByIdAndUpdate(reportId, {
+      parsedData,
+      biomarkerPanel,
+      scores,
+      reportDate,
+      modelUsed: getModelName(),
+      tokensUsed: usage,
+      status: "ready",
+    });
+
+    // 8. Update user: push to bloodReports array, set latest bloodReport, and
+    // flip latestReportReady so the dashboard switches to the Insights view.
+    await User.findByIdAndUpdate(userId, {
+      bloodReport: reportId,
+      latestReportReady: true,
+      $addToSet: { bloodReports: reportId },
+    });
+
+    // 9. Notify report ready
+    await Notification.create({
+      userId,
+      type: "report:ready",
+      metadata: { reportId, filename, testCount: biomarkerPanel.length },
+    });
+
+    // 10. Trigger goals + action plan generation in background (fire-and-forget)
+    // Uses atomic upsert to prevent duplicate plans on concurrent uploads
+    const { triggerGoalsAndActionPlan } = require("../services/actionPlanGenerator");
+    const ActionPlan = require("../models/ActionPlan");
+    ActionPlan.findOneAndUpdate(
+      { userId, reportId },
+      { $setOnInsert: { status: "pending" } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    )
+      .then((plan) => {
+        if (plan.status === "pending") {
+          return triggerGoalsAndActionPlan(userId, reportId, plan._id);
+        }
+      })
+      .catch((err) => console.error(`[ActionPlan] bg-gen trigger failed: ${err.message}`));
+  } catch (err) {
+    // On any error: mark report as failed and notify user
+    console.error(
+      `[Reports] Background processing failed for report=${reportId} user=${userId}: ${err.message}`
+    );
+    try {
+      await ReportData.findByIdAndUpdate(reportId, { status: "failed" });
+      await Notification.create({
+        userId,
+        type: "report:failed",
+        metadata: { reportId, filename, error: err.message },
+      });
+    } catch (cleanupErr) {
+      console.error(
+        `[Reports] Failed to update status/notify after error for report=${reportId}: ${cleanupErr.message}`
+      );
+    }
+  }
+}
+
+/**
+ * Upload a blood report — persists the file and returns immediately.
+ * AI parsing, normalization, and scoring happen in the background.
  */
 const uploadReport = async (req, res, next) => {
   try {
@@ -164,74 +307,6 @@ const uploadReport = async (req, res, next) => {
       );
     }
 
-    // Parse with vision AI (truncation-aware retry + JSON repair)
-    let parsedData, usage, truncated;
-    try {
-      const out = await parseReportResilient({
-        buffer,
-        mimeType,
-        filename,
-        userId: req.user.id,
-      });
-      parsedData = out.parsedData;
-      usage = out.usage;
-      truncated = out.truncated;
-    } catch (parseErr) {
-      // Concise single-line summary (Monitor-visible: contains "error"/"fail")
-      console.error(
-        `[Reports] parse-error stage=${parseErr.dumpPath ? "dumped" : "no-dump"} code=${parseErr.code || "n/a"} file=${filename} user=${req.user.id} dump=${parseErr.dumpPath || "none"} msg=${parseErr.message}`
-      );
-      console.error("[Reports] LLM parse failed", {
-        userId: req.user.id,
-        filename,
-        mimeType,
-        model: getModelName(),
-        code: parseErr.code || null,
-        rawLength: parseErr.rawLength ?? null,
-        rawSnippet: parseErr.rawSnippet ?? null,
-        dumpPath: parseErr.dumpPath ?? null,
-        message: parseErr.message,
-        stack: parseErr.stack,
-      });
-      return res.sendError(
-        "We couldn't read this report. Please re-upload or try a clearer scan.",
-        502
-      );
-    }
-
-    // Fetch user sex for sex-aware biomarker ranges
-    const userDoc = await User.findById(req.user.id)
-      .select("dateOfBirth onboardingData onboardingAnswers biologicalSex")
-      .lean();
-    let sex = userDoc?.biologicalSex || userDoc?.onboardingData?.sex || null;
-    if (!sex && userDoc?.onboardingAnswers) {
-      const oa = await mongoose.connection.db
-        .collection("onboardinganswers")
-        .findOne({ _id: userDoc.onboardingAnswers });
-      sex = oa?.answers?.["1.3"] || null;
-    }
-
-    // Normalize and compute biomarkers (sex-aware optimal ranges)
-    const normalized = normalizeTests(parsedData, sex);
-    const derived = computeDerivedBiomarkers(normalized);
-    const allTests = [...normalized, ...derived];
-    const biomarkerPanel = buildFullBiomarkerPanel(allTests);
-    const reportDate = extractReportDate(parsedData) || new Date();
-
-    // Compute scores (non-blocking — report saves even if scoring fails)
-    let scores = null;
-    try {
-      scores = computeScores(biomarkerPanel, {
-        dateOfBirth: userDoc?.dateOfBirth,
-        sex,
-      });
-    } catch (err) {
-      console.error(
-        "[Reports] Scoring failed, saving report without scores:",
-        err.message
-      );
-    }
-
     // Persist the raw upload to R2 so it can be viewed later. Key is derived
     // from userId + file hash so duplicate uploads (same user, same bytes)
     // land on the same object — complements the DB-level dedupe above.
@@ -253,63 +328,41 @@ const uploadReport = async (req, res, next) => {
       );
     }
 
-    // Create report document
+    // Create report document with 'uploaded' status — no parsed data yet
     const reportData = await ReportData.create({
       _id: reportObjectId,
       userId: req.user.id,
       sourceUrl,
       filename,
       mimeType,
-      parsedData,
-      reportDate,
+      parsedData: {},
+      reportDate: null,
       reportLabel: "",
-      biomarkerPanel,
-      scores,
-      modelUsed: getModelName(),
-      tokensUsed: usage,
       fileHash,
       storageKey,
+      status: "uploaded",
     });
 
-    // Update user: push to bloodReports array, set latest bloodReport, and
-    // flip latestReportReady so the dashboard switches to the Insights view.
-    await User.findByIdAndUpdate(req.user.id, {
-      bloodReport: reportData._id,
-      latestReportReady: true,
-      $addToSet: { bloodReports: reportData._id },
+    // Create upload success notification
+    await Notification.create({
+      userId: req.user.id,
+      type: "upload:success",
+      metadata: { reportId: reportData._id, filename },
     });
 
-    // Trigger goals + action plan generation in background (fire-and-forget)
-    // Uses atomic upsert to prevent duplicate plans on concurrent uploads
-    const { triggerGoalsAndActionPlan } = require("../services/actionPlanGenerator");
-    const ActionPlan = require("../models/ActionPlan");
-    ActionPlan.findOneAndUpdate(
-      { userId: req.user.id, reportId: reportData._id },
-      { $setOnInsert: { status: "pending" } },
-      { upsert: true, new: true, setDefaultsOnInsert: true }
-    )
-      .then((plan) => {
-        if (plan.status === "pending") {
-          return triggerGoalsAndActionPlan(req.user.id, reportData._id, plan._id);
-        }
-      })
-      .catch((err) => console.error(`[ActionPlan] bg-gen trigger failed: ${err.message}`));
-
+    // Return 202 immediately — processing continues in the background
     res.sendSuccess(
       {
         _id: reportData._id,
         filename,
-        mimeType,
-        reportDate,
-        parsedData,
-        biomarkerPanel,
-        scores,
-        uploadedAt: reportData.createdAt,
-        latestReportReady: true,
+        status: "uploaded",
       },
-      "Blood report uploaded and parsed successfully",
-      201
+      "Blood report uploaded. Processing will continue in the background.",
+      202
     );
+
+    // Fire-and-forget: process the report in the background
+    processReportInBackground(req.user.id, reportData._id, buffer, mimeType, filename);
   } catch (error) {
     next(error);
   }
@@ -325,7 +378,7 @@ const listReports = async (req, res, next) => {
     const [reports, actionPlans] = await Promise.all([
       ReportData.find({ userId: req.user.id })
         .select(
-          "filename sourceUrl parsedData reportDate reportLabel biomarkerPanel createdAt"
+          "filename sourceUrl parsedData reportDate reportLabel biomarkerPanel status createdAt"
         )
         .sort({ reportDate: -1, createdAt: -1 })
         .lean(),
@@ -354,6 +407,7 @@ const listReports = async (req, res, next) => {
         testCount:
           r.biomarkerPanel?.filter((t) => t.numericValue !== null).length || 0,
         parsedData: r.parsedData,
+        status: r.status || "ready",
         uploadedAt: r.createdAt,
         actionPlan: plan ? true : false,
         actionPlanId: plan?._id || null,
@@ -651,6 +705,44 @@ const getBiomarkerTimeline = async (req, res, next) => {
   }
 };
 
+/**
+ * Batch trends: returns historical values for all tested biomarkers across reports.
+ * One API call instead of N individual timeline calls.
+ */
+const getBiomarkerTrends = async (req, res, next) => {
+  try {
+    const reports = await ReportData.find({ userId: req.user.id })
+      .select("biomarkerPanel reportDate createdAt")
+      .sort({ reportDate: 1, createdAt: 1 })
+      .lean();
+
+    if (reports.length === 0) {
+      return res.sendSuccess({ trends: {} }, "No reports found");
+    }
+
+    const trends = {};
+
+    for (const r of reports) {
+      const date = (r.reportDate || r.createdAt).toISOString().slice(0, 10);
+      for (const bm of r.biomarkerPanel) {
+        if (bm.numericValue == null) continue;
+        if (!trends[bm.canonicalName]) {
+          trends[bm.canonicalName] = [];
+        }
+        trends[bm.canonicalName].push({
+          date,
+          value: bm.numericValue,
+          reportId: r._id,
+        });
+      }
+    }
+
+    res.sendSuccess({ trends, reportCount: reports.length }, "Biomarker trends retrieved");
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   uploadReport,
   listReports,
@@ -661,4 +753,5 @@ module.exports = {
   getBiomarkers,
   getBiomarkerPanel,
   getBiomarkerTimeline,
+  getBiomarkerTrends,
 };

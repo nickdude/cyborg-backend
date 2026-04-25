@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const User = require("../models/User");
+const Notification = require("../models/Notification");
 const sendEmail = require("../utils/sendEmail");
 const {
   generateOTP,
@@ -205,6 +206,19 @@ const verifyOTP = async (req, res, next) => {
     user[otpExpiryField] = null;
 
     await user.save();
+
+    // Notify linked doctor that a new patient registered via their referral
+    if (user.linkedDoctor) {
+      Notification.create({
+        userId: user.linkedDoctor,
+        type: "patient:registered",
+        metadata: {
+          patientId: user._id,
+          patientEmail: user.email || user.phone,
+          patientName: user.firstName || user.email || user.phone,
+        },
+      }).catch((err) => console.error("[Auth] Failed to notify doctor:", err.message));
+    }
 
     // OTP proves ownership — issue the session token so the registration flow
     // lands the user directly signed-in (no extra login round-trip).

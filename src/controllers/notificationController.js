@@ -34,4 +34,17 @@ const markRead = async (req, res, next) => {
   }
 };
 
-module.exports = { listNotifications, markRead };
+const markAllRead = async (req, res, next) => {
+  try {
+    const userId = req.user.id || req.user._id;
+    await Notification.updateMany(
+      { userId, read: false },
+      { $set: { read: true } }
+    );
+    res.sendSuccess(null, "All notifications marked as read");
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = { listNotifications, markRead, markAllRead };

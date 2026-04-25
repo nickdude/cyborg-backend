@@ -20,7 +20,7 @@ const reportDataSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   sourceUrl: { type: String, required: true },
   filename: { type: String, default: '' },
-  parsedData: { type: mongoose.Schema.Types.Mixed, required: true },
+  parsedData: { type: mongoose.Schema.Types.Mixed, default: {} },
   reportDate: { type: Date, default: null },
   reportLabel: { type: String, default: '' },
   biomarkerPanel: { type: [normalizedTestSchema], default: [] },
@@ -38,6 +38,12 @@ const reportDataSchema = new mongoose.Schema({
   // module to put this somewhere else (S3/R2/etc).
   storageKey: { type: String, default: null },
   mimeType: { type: String, default: null },
+  status: {
+    type: String,
+    enum: ['uploaded', 'analyzing', 'parsed', 'ready', 'failed'],
+    default: 'uploaded',
+    index: true,
+  },
 }, { timestamps: true, collection: 'reportsData' });
 
 reportDataSchema.index({ userId: 1, reportDate: -1 });

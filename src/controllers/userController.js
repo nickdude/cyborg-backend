@@ -194,6 +194,11 @@ const getUserProfile = async (req, res, next) => {
       createdAt: user.createdAt,
     };
 
+    profileData.latestReportReady =
+      !!user.latestReportReady ||
+      (Array.isArray(user.bloodReports) && user.bloodReports.length > 0);
+    profileData.bloodReports = user.bloodReports || [];
+
     // Include doctor-specific fields
     if (user.userType === "doctor") {
       profileData.referralCode = user.referralCode;

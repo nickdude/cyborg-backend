@@ -1,6 +1,8 @@
 const Chat = require("../models/Chat");
 const User = require("../models/User");
 const CoreFact = require("../models/CoreFact");
+const ReportData = require("../models/ReportData");
+const Goal = require("../models/Goal");
 const { buildDoctorSystemPrompt } = require("../prompts/doctorChat");
 const { buildContextMessages } = require("../utils/context");
 const { streamChat, getProvider, getModelName } = require("../providers/ai");
@@ -114,8 +116,8 @@ async function getPatientContext(patientId) {
  */
 const listPatients = async (req, res, next) => {
   try {
-    const patients = await User.find({ isDeleted: { $ne: true }, userType: "user" })
-      .select("firstName lastName email onboardingCompleted")
+    const patients = await User.find({ isDeleted: { $ne: true }, userType: "user", linkedDoctor: req.user.id })
+      .select("firstName lastName email phone onboardingCompleted createdAt")
       .sort({ firstName: 1 })
       .lean();
 
@@ -132,20 +134,22 @@ const getPatient = async (req, res, next) => {
   try {
     const { patientId } = req.params;
 
-    const patient = await User.findById(patientId)
-      .select("firstName lastName email onboardingCompleted onboardingData bloodReport")
-      .lean();
+    const [patient, coreFacts, latestReport, goals] = await Promise.all([
+      User.findById(patientId)
+        .select("firstName lastName email phone dateOfBirth biologicalSex onboardingCompleted onboardingData bloodReport bloodReports")
+        .lean(),
+      CoreFact.find({ userId: patientId }).sort({ importance: 1 }).limit(30).lean(),
+      ReportData.findOne({ userId: patientId }).sort({ createdAt: -1 })
+        .select("biomarkerPanel scores reportDate parsedData createdAt")
+        .lean(),
+      Goal.find({ userId: patientId }).sort({ createdAt: -1 }).lean().catch(() => []),
+    ]);
 
     if (!patient) {
       return res.sendError("Patient not found", 404);
     }
 
-    const coreFacts = await CoreFact.find({ userId: patientId })
-      .sort({ importance: 1 })
-      .limit(30)
-      .lean();
-
-    res.sendSuccess({ patient, coreFacts }, "Patient retrieved successfully");
+    res.sendSuccess({ patient, coreFacts, latestReport, goals }, "Patient retrieved successfully");
   } catch (error) {
     next(error);
   }
