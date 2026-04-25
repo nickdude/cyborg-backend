@@ -757,8 +757,15 @@ function computeBioAge(bm, chronoAge) {
 
   if (!isFinite(phenoAge)) return null
 
-  // Sanity clamp: PhenoAge should be within reasonable bounds of chronoAge
-  const clampedAge = Math.max(chronoAge - 20, Math.min(chronoAge + 20, phenoAge))
+  // When markers are missing, blend toward chronoAge to prevent
+  // median-driven extremes. With all 9 markers: 100% phenoAge.
+  // With 5 markers: ~56% phenoAge + ~44% chronoAge.
+  const weight = available / 9
+  const blendedAge = phenoAge * weight + chronoAge * (1 - weight)
+
+  // Clamp range scales with confidence: high=±15yr, medium=±10yr, low=±7yr
+  const maxDelta = confidence === 'high' ? 15 : confidence === 'medium' ? 10 : 7
+  const clampedAge = Math.max(chronoAge - maxDelta, Math.min(chronoAge + maxDelta, blendedAge))
 
   const delta = chronoAge - clampedAge // positive = younger
   const roundedAge = Math.round(clampedAge * 10) / 10
