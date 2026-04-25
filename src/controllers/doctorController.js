@@ -117,11 +117,104 @@ async function getPatientContext(patientId) {
 const listPatients = async (req, res, next) => {
   try {
     const patients = await User.find({ isDeleted: { $ne: true }, userType: "user", linkedDoctor: req.user.id })
-      .select("firstName lastName email phone onboardingCompleted createdAt")
+      .select("firstName lastName email phone dateOfBirth biologicalSex onboardingCompleted createdAt bloodReports")
       .sort({ firstName: 1 })
       .lean();
 
-    res.sendSuccess(patients, "Patients retrieved successfully");
+    if (patients.length === 0) {
+      return res.sendSuccess([], "No patients found");
+    }
+
+    const patientIds = patients.map((p) => p._id);
+
+    const [latestReports, goalCounts] = await Promise.all([
+      ReportData.aggregate([
+        { $match: { userId: { $in: patientIds }, status: { $nin: ["failed"] } } },
+        { $sort: { createdAt: -1 } },
+        {
+          $group: {
+            _id: "$userId",
+            scores: { $first: "$scores" },
+            reportDate: { $first: "$reportDate" },
+            biomarkerCount: { $first: { $size: { $ifNull: ["$biomarkerPanel", []] } } },
+            flaggedCount: {
+              $first: {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$biomarkerPanel", []] },
+                    as: "b",
+                    cond: { $in: ["$$b.flag", ["high", "low", "critical"]] },
+                  },
+                },
+              },
+            },
+            apobValue: {
+              $first: {
+                $let: {
+                  vars: {
+                    apob: {
+                      $arrayElemAt: [
+                        {
+                          $filter: {
+                            input: { $ifNull: ["$biomarkerPanel", []] },
+                            as: "b",
+                            cond: { $eq: ["$$b.canonicalName", "apob"] },
+                          },
+                        },
+                        0,
+                      ],
+                    },
+                  },
+                  in: "$$apob.numericValue",
+                },
+              },
+            },
+          },
+        },
+      ]),
+      Goal.aggregate([
+        { $match: { userId: { $in: patientIds } } },
+        { $group: { _id: "$userId", count: { $sum: 1 } } },
+      ]),
+    ]);
+
+    const reportMap = new Map(latestReports.map((r) => [r._id.toString(), r]));
+    const goalMap = new Map(goalCounts.map((g) => [g._id.toString(), g.count]));
+
+    const enriched = patients.map((p) => {
+      const pid = p._id.toString();
+      const report = reportMap.get(pid);
+      const goalCount = goalMap.get(pid) || 0;
+
+      let age = null;
+      if (p.dateOfBirth) {
+        age = Math.floor((Date.now() - new Date(p.dateOfBirth).getTime()) / (365.25 * 24 * 60 * 60 * 1000));
+      }
+
+      let status = "Normal";
+      if (report) {
+        if (report.flaggedCount >= 5) status = "Need Attention";
+        else if (report.flaggedCount >= 2) status = "Review Pending";
+      }
+
+      return {
+        ...p,
+        age,
+        status,
+        goalCount,
+        scores: report?.scores || null,
+        reportDate: report?.reportDate || null,
+        biomarkerCount: report?.biomarkerCount || 0,
+        flaggedCount: report?.flaggedCount || 0,
+        apobValue: report?.apobValue || null,
+        bioAge: report?.scores?.bioAge || null,
+        cyborgScore: report?.scores?.cyborgScore?.final || null,
+        cyborgGrade: report?.scores?.cyborgScore?.grade || null,
+        paceOfAging: report?.scores?.paceOfAging?.pace || null,
+      };
+    });
+
+    res.sendSuccess(enriched, "Patients retrieved successfully");
   } catch (error) {
     next(error);
   }
