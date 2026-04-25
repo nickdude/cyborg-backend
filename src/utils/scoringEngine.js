@@ -688,23 +688,50 @@ const GRADERS = {
 // BIOAGE (PhenoAge)
 // ═══════════════════════════════════════════════════════════════════════════
 
-function computeBioAge(bm, chronoAge) {
-  // Required biomarkers
-  const albumin = val(bm, 'albumin')
-  const creatinine = val(bm, 'creatinine')
-  const glucose = val(bm, 'glucose_fasting') ?? val(bm, 'glucose_random')
-  const hscrp = val(bm, 'hscrp')
-  const lymphPct = val(bm, 'lymphocytes_pct')
-  const mcv = val(bm, 'mcv')
-  const rdw = val(bm, 'rdw')
-  const alp = val(bm, 'alp')
-  const wbc = val(bm, 'wbc')
+// Population medians (NHANES reference, healthy adults 20-60)
+const BIOAGE_MEDIANS = {
+  albumin: 4.2,       // g/dL
+  creatinine: 0.9,    // mg/dL
+  glucose: 93,        // mg/dL fasting
+  hscrp: 1.5,         // mg/L
+  lymphPct: 30,       // %
+  mcv: 89,            // fL
+  rdw: 12.8,          // %
+  alp: 70,            // U/L
+  wbc: 6.5,           // 10^3/µL
+}
 
-  if ([albumin, creatinine, glucose, hscrp, lymphPct, mcv, rdw, alp, wbc].some(v => v == null)) {
-    return null // Cannot compute without all 9 biomarkers
+function computeBioAge(bm, chronoAge) {
+  const raw = {
+    albumin: val(bm, 'albumin'),
+    creatinine: val(bm, 'creatinine'),
+    glucose: val(bm, 'glucose_fasting') ?? val(bm, 'glucose_random'),
+    hscrp: val(bm, 'hscrp'),
+    lymphPct: val(bm, 'lymphocytes_pct'),
+    mcv: val(bm, 'mcv'),
+    rdw: val(bm, 'rdw'),
+    alp: val(bm, 'alp'),
+    wbc: val(bm, 'wbc'),
   }
 
+  const available = Object.values(raw).filter(v => v != null).length
+  if (available < 5) return null // too few markers for any meaningful estimate
+
+  // Substitute population medians for missing values
+  const albumin = raw.albumin ?? BIOAGE_MEDIANS.albumin
+  const creatinine = raw.creatinine ?? BIOAGE_MEDIANS.creatinine
+  const glucose = raw.glucose ?? BIOAGE_MEDIANS.glucose
+  const hscrp = raw.hscrp ?? BIOAGE_MEDIANS.hscrp
+  const lymphPct = raw.lymphPct ?? BIOAGE_MEDIANS.lymphPct
+  const mcv = raw.mcv ?? BIOAGE_MEDIANS.mcv
+  const rdw = raw.rdw ?? BIOAGE_MEDIANS.rdw
+  const alp = raw.alp ?? BIOAGE_MEDIANS.alp
+  const wbc = raw.wbc ?? BIOAGE_MEDIANS.wbc
+
   if (hscrp <= 0) return null // ln(0) is undefined
+
+  let confidence = 'high'
+  if (available < 9) confidence = available >= 7 ? 'medium' : 'low'
 
   // Step 1: Linear combination (xb)
   const xb = -19.9067
@@ -731,14 +758,11 @@ function computeBioAge(bm, chronoAge) {
   if (!isFinite(phenoAge)) return null
 
   // Sanity clamp: PhenoAge should be within reasonable bounds of chronoAge
-  // The formula can produce extreme values for very healthy/unhealthy profiles
   const clampedAge = Math.max(chronoAge - 20, Math.min(chronoAge + 20, phenoAge))
 
   const delta = chronoAge - clampedAge // positive = younger
   const roundedAge = Math.round(clampedAge * 10) / 10
 
-  // Grade
-  // Grade: A (≥5yr younger), B (1-4yr younger), C (±2yr), D (>2yr older)
   let grade
   if (delta >= 5) grade = 'A'
   else if (delta >= 1) grade = 'B'
@@ -750,6 +774,9 @@ function computeBioAge(bm, chronoAge) {
     chronoAge,
     delta: Math.round(delta * 10) / 10,
     grade,
+    confidence,
+    markersUsed: available,
+    markersTotal: 9,
   }
 }
 
