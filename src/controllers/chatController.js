@@ -145,6 +145,7 @@ const listChats = async (req, res, next) => {
     const chats = await Chat.find({
       userId: req.user.id,
       chatType: "patient",
+      "messages.0": { $exists: true },
     })
       .select("_id title createdAt updatedAt")
       .sort({ updatedAt: -1 });

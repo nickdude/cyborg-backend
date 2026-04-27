@@ -63,27 +63,33 @@ const getPlan = async (req, res, next) => {
     }
 
     const plan = await ActionPlan.findOne({ _id: planId, userId })
-      .populate("goalIds", GOAL_FIELDS);
+      .populate({
+        path: "goalIds",
+        match: { deletedByDoctor: { $ne: true } },
+        select: GOAL_FIELDS,
+      });
     if (!plan) {
       return res.sendError("Action plan not found", 404);
     }
 
+    const isPendingReview = plan.status === "pending_review" || plan.status === "draft";
+
     res.sendSuccess(
       {
         _id: plan._id,
-        status: plan.status,
+        status: isPendingReview ? "awaiting_review" : plan.status,
         errorMessage: plan.errorMessage,
         overview: plan.overview,
         healthReport: plan.healthReport,
-        monitoredIssues: plan.goalIds,
-        protocol: plan.protocol,
-        nextSteps: plan.nextSteps,
-        planJson: plan.planJson,
+        monitoredIssues: isPendingReview ? [] : plan.goalIds,
+        protocol: isPendingReview ? null : plan.protocol,
+        nextSteps: isPendingReview ? null : plan.nextSteps,
+        planJson: isPendingReview ? null : plan.planJson,
         reportId: plan.reportId,
         generatedAt: plan.generatedAt,
         createdAt: plan.createdAt,
       },
-      "Action plan retrieved"
+      isPendingReview ? "Action plan is awaiting doctor review" : "Action plan retrieved"
     );
   } catch (error) {
     next(error);
@@ -94,11 +100,40 @@ const getLatestPlan = async (req, res, next) => {
   try {
     const userId = req.user.id;
 
-    const plan = await ActionPlan.findOne({ userId, status: "ready" })
+    const plan = await ActionPlan.findOne({ userId, status: { $in: ["ready", "approved"] } })
       .sort({ createdAt: -1 })
-      .populate("goalIds", GOAL_FIELDS);
+      .populate({
+        path: "goalIds",
+        match: { deletedByDoctor: { $ne: true } },
+        select: GOAL_FIELDS,
+      });
 
     if (!plan) {
+      // Check if there's a plan in review
+      const pendingPlan = await ActionPlan.findOne({
+        userId,
+        status: { $in: ["pending_review", "draft"] },
+      })
+        .sort({ createdAt: -1 })
+        .select("_id status healthReport overview reportId createdAt");
+
+      if (pendingPlan) {
+        return res.sendSuccess(
+          {
+            _id: pendingPlan._id,
+            status: "awaiting_review",
+            overview: pendingPlan.overview,
+            healthReport: pendingPlan.healthReport,
+            monitoredIssues: [],
+            protocol: null,
+            nextSteps: null,
+            reportId: pendingPlan.reportId,
+            createdAt: pendingPlan.createdAt,
+          },
+          "Action plan is awaiting doctor review"
+        );
+      }
+
       return res.sendError("No action plan found. Upload a blood report first.", 404);
     }
 

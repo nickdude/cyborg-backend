@@ -1,8 +1,11 @@
+const mongoose = require("mongoose");
 const Chat = require("../models/Chat");
 const User = require("../models/User");
 const CoreFact = require("../models/CoreFact");
 const ReportData = require("../models/ReportData");
 const Goal = require("../models/Goal");
+const ActionPlan = require("../models/ActionPlan");
+const { notify } = require("../utils/notificationHelper");
 const { buildDoctorSystemPrompt } = require("../prompts/doctorChat");
 const { buildContextMessages } = require("../utils/context");
 const { streamChat, getProvider, getModelName } = require("../providers/ai");
@@ -136,14 +139,29 @@ const listPatients = async (req, res, next) => {
             _id: "$userId",
             scores: { $first: "$scores" },
             reportDate: { $first: "$reportDate" },
-            biomarkerCount: { $first: { $size: { $ifNull: ["$biomarkerPanel", []] } } },
+            biomarkerCount: {
+              $first: {
+                $size: {
+                  $filter: {
+                    input: { $ifNull: ["$biomarkerPanel", []] },
+                    as: "b",
+                    cond: { $ne: ["$$b.numericValue", null] },
+                  },
+                },
+              },
+            },
             flaggedCount: {
               $first: {
                 $size: {
                   $filter: {
                     input: { $ifNull: ["$biomarkerPanel", []] },
                     as: "b",
-                    cond: { $in: ["$$b.flag", ["high", "low", "critical"]] },
+                    cond: {
+                      $and: [
+                        { $ne: ["$$b.numericValue", null] },
+                        { $in: ["$$b.flag", ["high", "low", "critical"]] },
+                      ],
+                    },
                   },
                 },
               },
@@ -245,6 +263,12 @@ const getPatient = async (req, res, next) => {
       return res.sendError("Patient not found", 404);
     }
 
+    if (latestReport?.biomarkerPanel) {
+      latestReport.biomarkerPanel = latestReport.biomarkerPanel.filter(
+        (b) => b.numericValue != null
+      );
+    }
+
     res.sendSuccess({ patient, coreFacts, latestReport, goals }, "Patient retrieved successfully");
   } catch (error) {
     next(error);
@@ -259,7 +283,11 @@ const getPatient = async (req, res, next) => {
  */
 const listDoctorChats = async (req, res, next) => {
   try {
-    const filter = { userId: req.user.id, chatType: "doctor" };
+    const filter = {
+      userId: req.user.id,
+      chatType: "doctor",
+      "messages.0": { $exists: true },
+    };
     if (req.query.patientId) {
       filter.patientId = req.query.patientId;
     }
@@ -463,6 +491,236 @@ const deleteDoctorChat = async (req, res, next) => {
   }
 };
 
+// ── Action Plan & Goal Management ────────────────────────────────
+
+async function verifyDoctorOwnership(doctorId, patientId) {
+  const patient = await User.findById(patientId).select("linkedDoctor firstName lastName").lean();
+  if (!patient) {
+    const err = new Error("Patient not found");
+    err.status = 404;
+    throw err;
+  }
+  if (!patient.linkedDoctor || String(patient.linkedDoctor) !== String(doctorId)) {
+    const err = new Error("Not authorized for this patient");
+    err.status = 403;
+    throw err;
+  }
+  return patient;
+}
+
+const EDITABLE_STATUSES = ["pending_review", "draft"];
+
+const getPatientActionPlan = async (req, res, next) => {
+  try {
+    const { patientId } = req.params;
+    await verifyDoctorOwnership(req.user.id, patientId);
+
+    const plan = await ActionPlan.findOne({
+      userId: patientId,
+      status: { $nin: ["superseded", "failed"] },
+    })
+      .sort({ createdAt: -1 })
+      .populate({
+        path: "goalIds",
+        match: { deletedByDoctor: { $ne: true } },
+      });
+
+    if (!plan) {
+      return res.sendError("No action plan found for this patient", 404);
+    }
+
+    const report = await ReportData.findById(plan.reportId)
+      .select("scores biomarkerPanel reportDate filename")
+      .lean();
+
+    res.sendSuccess({
+      _id: plan._id,
+      status: plan.status,
+      overview: plan.overview,
+      healthReport: plan.healthReport,
+      goals: plan.goalIds || [],
+      protocol: plan.protocol,
+      nextSteps: plan.nextSteps,
+      reportId: plan.reportId,
+      generatedAt: plan.generatedAt,
+      approvedBy: plan.approvedBy,
+      approvedAt: plan.approvedAt,
+      draftSavedAt: plan.draftSavedAt,
+      report: report ? {
+        scores: report.scores,
+        reportDate: report.reportDate,
+        filename: report.filename,
+      } : null,
+    }, "Action plan retrieved");
+  } catch (error) {
+    if (error.status) return res.sendError(error.message, error.status);
+    next(error);
+  }
+};
+
+const updatePatientGoals = async (req, res, next) => {
+  try {
+    const { patientId } = req.params;
+    const { goals } = req.body;
+    await verifyDoctorOwnership(req.user.id, patientId);
+
+    if (!Array.isArray(goals) || goals.length === 0) {
+      return res.sendError("Goals array is required", 400);
+    }
+
+    const plan = await ActionPlan.findOne({
+      userId: patientId,
+      status: { $in: EDITABLE_STATUSES },
+    }).sort({ createdAt: -1 });
+
+    if (!plan) {
+      return res.sendError("No editable action plan found", 404);
+    }
+
+    const updated = [];
+    for (const g of goals) {
+      if (!g._id) continue;
+      const doc = await Goal.findOneAndUpdate(
+        { _id: g._id, userId: patientId },
+        {
+          ...(g.title !== undefined && { title: g.title }),
+          ...(g.description !== undefined && { description: g.description }),
+          ...(g.priority !== undefined && { priority: g.priority }),
+          ...(g.whatThisMeans !== undefined && { whatThisMeans: g.whatThisMeans }),
+          ...(g.potentialCauses !== undefined && { potentialCauses: g.potentialCauses }),
+          ...(g.recommendedActions !== undefined && { recommendedActions: g.recommendedActions }),
+          editedByDoctor: true,
+        },
+        { new: true }
+      );
+      if (doc) updated.push(doc);
+    }
+
+    await ActionPlan.findByIdAndUpdate(plan._id, {
+      status: "draft",
+      draftSavedAt: new Date(),
+    });
+
+    res.sendSuccess({ goals: updated, planStatus: "draft" }, "Goals updated");
+  } catch (error) {
+    if (error.status) return res.sendError(error.message, error.status);
+    next(error);
+  }
+};
+
+const addGoal = async (req, res, next) => {
+  try {
+    const { patientId } = req.params;
+    const { title, description, priority, whatThisMeans, potentialCauses, recommendedActions } = req.body;
+    await verifyDoctorOwnership(req.user.id, patientId);
+
+    if (!title) return res.sendError("Title is required", 400);
+
+    const plan = await ActionPlan.findOne({
+      userId: patientId,
+      status: { $in: EDITABLE_STATUSES },
+    }).sort({ createdAt: -1 });
+
+    if (!plan) {
+      return res.sendError("No editable action plan found", 404);
+    }
+
+    const goal = await Goal.create({
+      userId: patientId,
+      reportId: plan.reportId,
+      goalId: "dr-" + new mongoose.Types.ObjectId().toString(),
+      title,
+      description: description || "",
+      priority: priority || "Medium",
+      whatThisMeans: whatThisMeans || "",
+      potentialCauses: potentialCauses || "",
+      recommendedActions: recommendedActions || [],
+      addedByDoctor: true,
+    });
+
+    await ActionPlan.findByIdAndUpdate(plan._id, {
+      $push: { goalIds: goal._id },
+      status: "draft",
+      draftSavedAt: new Date(),
+    });
+
+    res.sendSuccess(goal, "Goal added");
+  } catch (error) {
+    if (error.status) return res.sendError(error.message, error.status);
+    next(error);
+  }
+};
+
+const deleteGoal = async (req, res, next) => {
+  try {
+    const { patientId, goalId } = req.params;
+    await verifyDoctorOwnership(req.user.id, patientId);
+
+    const plan = await ActionPlan.findOne({
+      userId: patientId,
+      status: { $in: EDITABLE_STATUSES },
+    }).sort({ createdAt: -1 });
+
+    if (!plan) {
+      return res.sendError("No editable action plan found", 404);
+    }
+
+    const goal = await Goal.findOneAndUpdate(
+      { _id: goalId, userId: patientId },
+      { deletedByDoctor: true },
+      { new: true }
+    );
+    if (!goal) return res.sendError("Goal not found", 404);
+
+    await ActionPlan.findByIdAndUpdate(plan._id, {
+      status: "draft",
+      draftSavedAt: new Date(),
+    });
+
+    res.sendSuccess(null, "Goal deleted");
+  } catch (error) {
+    if (error.status) return res.sendError(error.message, error.status);
+    next(error);
+  }
+};
+
+const approveActionPlan = async (req, res, next) => {
+  try {
+    const { patientId } = req.params;
+    await verifyDoctorOwnership(req.user.id, patientId);
+
+    const plan = await ActionPlan.findOne({
+      userId: patientId,
+      status: { $in: EDITABLE_STATUSES },
+    }).sort({ createdAt: -1 });
+
+    if (!plan) {
+      return res.sendError("No action plan pending approval", 404);
+    }
+
+    await ActionPlan.findByIdAndUpdate(plan._id, {
+      status: "approved",
+      approvedBy: req.user.id,
+      approvedAt: new Date(),
+    });
+
+    await User.findByIdAndUpdate(patientId, {
+      actionPlanReady: true,
+      goalsApproved: true,
+    });
+
+    await notify(patientId, "goals:approved", {
+      planId: plan._id,
+      reportId: plan.reportId,
+    });
+
+    res.sendSuccess({ planId: plan._id }, "Action plan approved");
+  } catch (error) {
+    if (error.status) return res.sendError(error.message, error.status);
+    next(error);
+  }
+};
+
 module.exports = {
   listPatients,
   getPatient,
@@ -472,4 +730,9 @@ module.exports = {
   sendDoctorMessage,
   updateDoctorChat,
   deleteDoctorChat,
+  getPatientActionPlan,
+  updatePatientGoals,
+  addGoal,
+  deleteGoal,
+  approveActionPlan,
 };

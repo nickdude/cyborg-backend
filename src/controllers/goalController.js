@@ -1,12 +1,40 @@
 const Goal = require("../models/Goal");
+const ActionPlan = require("../models/ActionPlan");
 const { generateGoalCards } = require("../services/goalsEngine");
+
+async function getApprovalStatus(userId) {
+  const plan = await ActionPlan.findOne({
+    userId,
+    status: { $nin: ["superseded", "failed"] },
+  })
+    .sort({ createdAt: -1 })
+    .select("status")
+    .lean();
+  return plan?.status || null;
+}
 
 const listGoals = async (req, res, next) => {
   try {
     const userId = req.user.id;
 
-    // Read from persisted goals (latest report's goals)
-    const persistedGoals = await Goal.find({ userId })
+    const planStatus = await getApprovalStatus(userId);
+
+    if (planStatus === "pending" || planStatus === "generating") {
+      return res.sendSuccess(
+        { goals: [], meta: { status: "generating" } },
+        "Your health goals are being generated."
+      );
+    }
+
+    if (planStatus === "pending_review" || planStatus === "draft") {
+      return res.sendSuccess(
+        { goals: [], meta: { status: "awaiting_review" } },
+        "Your health goals are being reviewed by your doctor."
+      );
+    }
+
+    // approved or legacy "ready" — show goals
+    const persistedGoals = await Goal.find({ userId, deletedByDoctor: { $ne: true } })
       .sort({ createdAt: -1 })
       .limit(8)
       .lean();
@@ -27,6 +55,7 @@ const listGoals = async (req, res, next) => {
         mediumPriority: persistedGoals.filter((g) => g.priority === "Medium").length,
         lowPriority: persistedGoals.filter((g) => g.priority === "Low").length,
         source: "persisted",
+        status: "approved",
       };
       return res.sendSuccess({ goals: summaryGoals, meta }, "Goals retrieved");
     }
@@ -55,8 +84,12 @@ const getGoal = async (req, res, next) => {
     const userId = req.user.id;
     const { goalId } = req.params;
 
-    // Read from persisted goals first
-    const goal = await Goal.findOne({ userId, goalId })
+    const planStatus = await getApprovalStatus(userId);
+    if (planStatus && planStatus !== "approved" && planStatus !== "ready") {
+      return res.sendError("Goals are not yet approved by your doctor", 403);
+    }
+
+    const goal = await Goal.findOne({ userId, goalId, deletedByDoctor: { $ne: true } })
       .sort({ createdAt: -1 })
       .lean();
 

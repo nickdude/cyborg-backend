@@ -226,17 +226,22 @@ async function processReportInBackground(userId, reportId, buffer, mimeType, fil
       $addToSet: { bloodReports: reportId },
     });
 
-    // 9. Notify report ready
+    // 9. Notify report ready + notify linked doctor
     await Notification.create({
       userId,
       type: "report:ready",
       metadata: { reportId, filename, testCount: biomarkerPanel.length },
     });
+    const { notifyDoctor } = require("../utils/notificationHelper");
+    await notifyDoctor(userId, "doctor:report_uploaded", { reportId, filename });
 
-    // 10. Trigger goals + action plan generation in background (fire-and-forget)
-    // Uses atomic upsert to prevent duplicate plans on concurrent uploads
+    // 10. Supersede any existing non-approved plans, then trigger fresh generation
     const { triggerGoalsAndActionPlan } = require("../services/actionPlanGenerator");
     const ActionPlan = require("../models/ActionPlan");
+    await ActionPlan.updateMany(
+      { userId, status: { $in: ["pending", "generating", "pending_review", "draft"] } },
+      { $set: { status: "superseded" } }
+    );
     ActionPlan.findOneAndUpdate(
       { userId, reportId },
       { $setOnInsert: { status: "pending" } },
@@ -435,6 +440,12 @@ const getReport = async (req, res, next) => {
       return res.sendError("Report not found", 404);
     }
 
+    if (report.biomarkerPanel) {
+      report.biomarkerPanel = report.biomarkerPanel.filter(
+        (b) => b.numericValue != null
+      );
+    }
+
     res.sendSuccess(report, "Report retrieved successfully");
   } catch (error) {
     next(error);
@@ -610,9 +621,9 @@ const getBiomarkerPanel = async (req, res, next) => {
       );
     }
 
-    const tested = report.biomarkerPanel.filter((b) => b.numericValue !== null);
+    const tested = report.biomarkerPanel.filter((b) => b.numericValue != null);
     const missing = report.biomarkerPanel.filter(
-      (b) => b.numericValue === null
+      (b) => b.numericValue == null
     );
 
     res.sendSuccess(
@@ -623,13 +634,13 @@ const getBiomarkerPanel = async (req, res, next) => {
         filename: report.filename,
         scores: report.scores,
         summary: {
-          totalBiomarkers: report.biomarkerPanel.length,
+          totalBiomarkers: tested.length,
           tested: tested.length,
           missing: missing.length,
           flagged: tested.filter((b) => b.flag !== "normal").length,
           optimal: tested.filter((b) => b.optimalFlag === "optimal").length,
         },
-        biomarkerPanel: report.biomarkerPanel,
+        biomarkerPanel: tested,
       },
       "Biomarker panel retrieved successfully"
     );

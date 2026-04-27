@@ -3,7 +3,7 @@ const Goal = require("../models/Goal");
 const ReportData = require("../models/ReportData");
 const User = require("../models/User");
 const WearableData = require("../models/WearableData");
-const Notification = require("../models/Notification");
+const { notify, notifyDoctor } = require("../utils/notificationHelper");
 const { detectIssues } = require("../utils/issueDetector");
 const { generateGoals } = require("../utils/goalGenerator");
 const { generateNarratives } = require("../prompts/goalNarrative");
@@ -235,7 +235,7 @@ async function triggerGoalsAndActionPlan(userId, reportId, planId) {
     const healthReport = buildHealthReport(reportData);
 
     const planUpdate = {
-      status: "ready",
+      status: "pending_review",
       goalIds,
       previousPlanId: previousPlan?._id || null,
       overview,
@@ -263,13 +263,9 @@ async function triggerGoalsAndActionPlan(userId, reportId, planId) {
 
     await ActionPlan.findByIdAndUpdate(planId, planUpdate);
 
-    // Step 9: Update user flags + notify
-    await User.findByIdAndUpdate(userId, { actionPlanReady: true });
-    await Notification.create({
-      userId,
-      type: "action_plan_ready",
-      metadata: { planId, reportId },
-    });
+    // Step 9: Notify patient (awaiting review) + doctor (ready for review)
+    await notify(userId, "goals:awaiting_review", { planId, reportId });
+    await notifyDoctor(userId, "doctor:goals_ready_for_review", { planId, reportId });
 
     console.log(`[ActionPlan] Generation complete for plan=${planId}`);
   } catch (error) {

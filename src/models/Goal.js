@@ -80,6 +80,10 @@ const goalSchema = new mongoose.Schema(
     biomarkerEvidence: [biomarkerEvidenceSchema],
     protocolItems: [protocolItemSchema],
     delta: { type: deltaSchema, default: () => ({ status: "new" }) },
+
+    editedByDoctor: { type: Boolean, default: false },
+    addedByDoctor: { type: Boolean, default: false },
+    deletedByDoctor: { type: Boolean, default: false },
   },
   { timestamps: true }
 );

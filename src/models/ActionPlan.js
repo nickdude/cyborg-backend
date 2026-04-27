@@ -56,11 +56,18 @@ const actionPlanSchema = new mongoose.Schema(
     ],
     status: {
       type: String,
-      enum: ["pending", "generating", "ready", "failed"],
+      enum: ["pending", "generating", "ready", "pending_review", "draft", "approved", "failed", "superseded"],
       default: "pending",
     },
     errorMessage: { type: String, default: null },
     generationAttempts: { type: Number, default: 0 },
+    approvedBy: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      default: null,
+    },
+    approvedAt: { type: Date, default: null },
+    draftSavedAt: { type: Date, default: null },
 
     // Section 1: Overview
     overview: {
@@ -120,5 +127,6 @@ const actionPlanSchema = new mongoose.Schema(
 actionPlanSchema.index({ userId: 1, createdAt: -1 });
 actionPlanSchema.index({ userId: 1, reportId: 1 }, { unique: true });
 actionPlanSchema.index({ status: 1 });
+actionPlanSchema.index({ userId: 1, status: 1 });
 
 module.exports = mongoose.model("ActionPlan", actionPlanSchema);

@@ -153,6 +153,10 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    goalsApproved: {
+      type: Boolean,
+      default: false,
+    },
 
     // Profile
     profilePicture: String,

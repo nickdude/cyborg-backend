@@ -7,6 +7,13 @@ const { verifyToken, checkRole } = require("../middlewares/authMiddleware");
 router.get("/patients", verifyToken, checkRole(["doctor"]), doctorController.listPatients);
 router.get("/patients/:patientId", verifyToken, checkRole(["doctor"]), doctorController.getPatient);
 
+// Action Plan & Goal management for linked patients
+router.get("/patients/:patientId/action-plan", verifyToken, checkRole(["doctor"]), doctorController.getPatientActionPlan);
+router.put("/patients/:patientId/goals", verifyToken, checkRole(["doctor"]), doctorController.updatePatientGoals);
+router.post("/patients/:patientId/goals", verifyToken, checkRole(["doctor"]), doctorController.addGoal);
+router.delete("/patients/:patientId/goals/:goalId", verifyToken, checkRole(["doctor"]), doctorController.deleteGoal);
+router.post("/patients/:patientId/action-plan/approve", verifyToken, checkRole(["doctor"]), doctorController.approveActionPlan);
+
 // Doctor chat CRUD
 router.get("/chats", verifyToken, checkRole(["doctor"]), doctorController.listDoctorChats);
 router.post("/chats", verifyToken, checkRole(["doctor"]), doctorController.createDoctorChat);
