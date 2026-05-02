@@ -39,4 +39,14 @@ const checkRole = (allowedRoles) => {
   };
 };
 
-module.exports = { verifyToken, checkRole };
+const checkOwnership = (req, res, next) => {
+  const paramUserId = req.params.userId;
+  if (!paramUserId) return next();
+  if (req.user.userType === "doctor") return next();
+  if (String(req.user.id) !== String(paramUserId)) {
+    return res.sendError("Forbidden", 403);
+  }
+  next();
+};
+
+module.exports = { verifyToken, checkRole, checkOwnership };

@@ -750,6 +750,416 @@ const ISSUE_TEMPLATES = [
     },
     relatedGoals: ['goal_nutrient_1', 'goal_thyroid_1'],
   },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SLEEP-RELATED (3)
+  // ═══════════════════════════════════════════════════════════════════════════
+  {
+    issueId: 'SLEEP-MELATONIN-01',
+    title: 'Low Melatonin Precursors',
+    category: 'sleep',
+    basePriority: 60,
+    threshold: 0.55,
+    primaryBiomarkers: ['vitamin_b6', 'magnesium'],  // tryptophan not in normalizer
+    supportingBiomarkers: ['vitamin_d', 'ferritin', 'iron'],
+    labThresholds: {
+      vitamin_b6: { optimalMin: 20, normalMin: 5, criticalMin: 3 },    // ng/mL
+      magnesium: { optimalMin: 2.0, normalMin: 1.7, criticalMin: 1.3 }, // mg/dL
+    },
+    questionnaireFlags: {
+      conditions: ['insomnia', 'sleep disorder'],
+      familyHistory: [],
+      symptoms: ['difficulty sleeping', 'insomnia', 'poor sleep quality'],
+      medications: ['melatonin', 'sleep aid'],
+      dietFlags: ['vegan', 'vegetarian'],
+    },
+    wearableSignals: {
+      sleep_below: 6,
+      hrv_below: 35,
+    },
+    symptomMatches: {
+      perfect: ['insomnia', 'difficulty sleeping'],
+      partial: ['fatigue', 'anxiety', 'poor sleep quality', 'mood changes'],
+    },
+    relatedGoals: ['goal_sleep_1'],
+  },
+
+  {
+    issueId: 'SLEEP-CORTISOL-01',
+    title: 'Elevated Evening Cortisol',
+    category: 'sleep',
+    basePriority: 70,
+    threshold: 0.60,
+    primaryBiomarkers: ['cortisol'],
+    supportingBiomarkers: ['dhea_s', 'magnesium', 'vitamin_b6'],
+    labThresholds: {
+      cortisol: { optimalMax: 15, normalMax: 20, critical: 25 },       // mcg/dL (morning reference)
+    },
+    questionnaireFlags: {
+      conditions: ['insomnia', 'anxiety disorder', 'chronic stress'],
+      familyHistory: [],
+      symptoms: ['insomnia', 'difficulty sleeping', 'anxiety', 'night waking'],
+      medications: ['sleep aid', 'benzodiazepine', 'ssri'],
+      dietFlags: [],
+    },
+    wearableSignals: {
+      sleep_below: 6,
+      hrv_below: 30,
+      resting_hr_above: 78,
+    },
+    symptomMatches: {
+      perfect: ['insomnia', 'difficulty sleeping', 'anxiety'],
+      partial: ['fatigue', 'weight gain', 'brain fog', 'night waking'],
+    },
+    relatedGoals: ['goal_sleep_1'],
+  },
+
+  {
+    issueId: 'SLEEP-IRON-01',
+    title: 'Iron-Related Sleep Disruption',
+    category: 'sleep',
+    basePriority: 55,
+    threshold: 0.55,
+    primaryBiomarkers: ['ferritin', 'iron'],
+    supportingBiomarkers: ['tibc', 'transferrin_saturation', 'hemoglobin'],
+    labThresholds: {
+      ferritin: { optimalMin: 50, normalMin: 30, criticalMin: 10 },    // ng/mL (≥30 needed for sleep)
+      iron: { optimalMin: 80, normalMin: 60, criticalMin: 40 },        // mcg/dL
+    },
+    questionnaireFlags: {
+      conditions: ['restless leg syndrome', 'insomnia', 'anemia'],
+      familyHistory: [],
+      symptoms: ['restless legs', 'poor sleep', 'leg discomfort at night'],
+      medications: ['iron supplement'],
+      dietFlags: ['vegan', 'vegetarian'],
+    },
+    wearableSignals: {
+      sleep_below: 6,
+      resting_hr_above: 78,
+    },
+    symptomMatches: {
+      perfect: ['restless legs', 'leg discomfort at night'],
+      partial: ['poor sleep', 'fatigue', 'insomnia'],
+    },
+    relatedGoals: ['goal_sleep_1'],
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BONE HEALTH (2)
+  // ═══════════════════════════════════════════════════════════════════════════
+  {
+    issueId: 'BONE-VITD-01',
+    title: 'Bone Density Risk',
+    category: 'bone',
+    basePriority: 60,
+    threshold: 0.55,
+    primaryBiomarkers: ['vitamin_d', 'calcium'],
+    supportingBiomarkers: ['phosphorus', 'alp', 'magnesium'],  // pth not in normalizer
+    labThresholds: {
+      vitamin_d: { optimalMin: 40, normalMin: 30, criticalMin: 15 },   // ng/mL
+      calcium: { optimalMin: 8.8, optimalMax: 10.2, normalMin: 8.5, normalMax: 10.5, criticalMin: 7.0 }, // mg/dL
+      alp: { optimalMax: 100, normalMax: 120, critical: 200 },         // U/L (elevated may signal bone turnover)
+    },
+    questionnaireFlags: {
+      conditions: ['osteoporosis', 'osteopenia', 'vitamin d deficiency'],
+      familyHistory: ['osteoporosis', 'hip fracture'],
+      symptoms: ['bone pain', 'back pain', 'height loss'],
+      medications: ['bisphosphonate', 'calcium supplement', 'vitamin d'],
+      dietFlags: ['vegan', 'lactose intolerant'],
+    },
+    wearableSignals: {
+      steps_below: 4000,
+    },
+    symptomMatches: {
+      perfect: ['bone pain', 'frequent fractures'],
+      partial: ['back pain', 'height loss', 'muscle weakness'],
+    },
+    relatedGoals: ['goal_bone_1'],
+  },
+
+  {
+    issueId: 'BONE-PTH-01',
+    title: 'Parathyroid Imbalance',
+    category: 'bone',
+    basePriority: 65,
+    threshold: 0.60,
+    primaryBiomarkers: ['calcium', 'vitamin_d'],  // pth not in normalizer; calcium + vitamin_d as proxies
+    supportingBiomarkers: ['phosphorus', 'alp', 'magnesium'],
+    labThresholds: {
+      calcium: { optimalMin: 8.8, optimalMax: 10.2, normalMin: 8.5, normalMax: 10.5, critical: 12.0 }, // mg/dL (elevated = hyperparathyroidism)
+      vitamin_d: { optimalMin: 40, normalMin: 30, criticalMin: 15 },   // ng/mL
+      phosphorus: { optimalMin: 2.8, optimalMax: 4.5, normalMin: 2.5, normalMax: 5.0 }, // mg/dL
+    },
+    questionnaireFlags: {
+      conditions: ['hyperparathyroidism', 'osteoporosis', 'kidney stones'],
+      familyHistory: ['osteoporosis', 'kidney stones'],
+      symptoms: ['bone pain', 'kidney stones', 'fatigue', 'muscle cramps'],
+      medications: ['calcium supplement', 'vitamin d'],
+      dietFlags: [],
+    },
+    wearableSignals: {},
+    symptomMatches: {
+      perfect: ['kidney stones', 'bone pain'],
+      partial: ['fatigue', 'muscle cramps', 'constipation', 'brain fog'],
+    },
+    relatedGoals: ['goal_bone_1'],
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // IMMUNE FUNCTION (2)
+  // ═══════════════════════════════════════════════════════════════════════════
+  {
+    issueId: 'IMM-WBC-01',
+    title: 'Immune Dysregulation',
+    category: 'immune',
+    basePriority: 65,
+    threshold: 0.55,
+    primaryBiomarkers: ['wbc', 'lymphocytes_abs', 'neutrophils_abs'],
+    supportingBiomarkers: ['nlr', 'hscrp', 'esr', 'vitamin_d'],
+    labThresholds: {
+      wbc: { optimalMin: 4.5, optimalMax: 10.0, normalMin: 4.0, normalMax: 11.0, criticalMin: 2.0, critical: 20.0 }, // x10^3/uL
+      lymphocytes_abs: { optimalMin: 1.2, optimalMax: 3.5, normalMin: 1.0, normalMax: 4.0, criticalMin: 0.5 }, // x10^3/uL
+      neutrophils_abs: { optimalMin: 1.8, optimalMax: 7.0, normalMin: 1.5, normalMax: 8.0, criticalMin: 1.0 }, // x10^3/uL
+    },
+    questionnaireFlags: {
+      conditions: ['autoimmune', 'immunodeficiency', 'recurrent infections'],
+      familyHistory: ['autoimmune'],
+      symptoms: ['frequent infections', 'slow wound healing', 'recurring illness'],
+      medications: ['immunosuppressant', 'biologic', 'chemotherapy'],
+      dietFlags: [],
+    },
+    wearableSignals: {
+      hrv_below: 30,
+      resting_hr_above: 80,
+    },
+    symptomMatches: {
+      perfect: ['frequent infections', 'slow wound healing'],
+      partial: ['fatigue', 'recurring illness', 'fever', 'swollen lymph nodes'],
+    },
+    relatedGoals: ['goal_immune_1'],
+  },
+
+  {
+    issueId: 'IMM-ZINC-01',
+    title: 'Zinc-Related Immune Deficit',
+    category: 'immune',
+    basePriority: 55,
+    threshold: 0.55,
+    primaryBiomarkers: ['alp'],  // zinc not in normalizer; ALP is a zinc-dependent enzyme (low ALP can indicate zinc deficiency)
+    supportingBiomarkers: ['vitamin_d', 'hscrp', 'wbc'],
+    labThresholds: {
+      alp: { optimalMin: 50, normalMin: 35, criticalMin: 20 },        // U/L (low ALP → possible zinc deficiency)
+    },
+    questionnaireFlags: {
+      conditions: ['zinc deficiency', 'immune deficiency'],
+      familyHistory: [],
+      symptoms: ['frequent colds', 'slow healing', 'hair loss', 'loss of taste'],
+      medications: ['zinc supplement'],
+      dietFlags: ['vegan', 'vegetarian'],
+    },
+    wearableSignals: {
+      hrv_below: 35,
+    },
+    symptomMatches: {
+      perfect: ['frequent colds', 'slow healing'],
+      partial: ['hair loss', 'loss of taste', 'poor appetite', 'skin rashes'],
+    },
+    relatedGoals: ['goal_immune_1'],
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // COGNITIVE / NEUROLOGICAL (2)
+  // ═══════════════════════════════════════════════════════════════════════════
+  {
+    issueId: 'COG-B12-01',
+    title: 'Neurological B12 Deficit',
+    category: 'cognitive',
+    basePriority: 70,
+    threshold: 0.55,
+    primaryBiomarkers: ['vitamin_b12', 'mma'],
+    supportingBiomarkers: ['homocysteine', 'folate', 'folate_rbc', 'mcv'],
+    labThresholds: {
+      vitamin_b12: { optimalMin: 500, normalMin: 200, criticalMin: 150 }, // pg/mL
+      mma: { optimalMax: 250, normalMax: 370, critical: 600 },            // nmol/L (elevated = functional B12 deficiency)
+      homocysteine: { optimalMax: 8, normalMax: 12, critical: 20 },       // µmol/L
+    },
+    questionnaireFlags: {
+      conditions: ['b12 deficiency', 'pernicious anemia', 'neuropathy'],
+      familyHistory: ['dementia', 'alzheimers'],
+      symptoms: ['brain fog', 'numbness', 'tingling', 'memory issues'],
+      medications: ['metformin', 'ppi', 'b12 injection'],
+      dietFlags: ['vegan', 'vegetarian'],
+    },
+    wearableSignals: {
+      hrv_below: 30,
+      sleep_below: 6,
+    },
+    symptomMatches: {
+      perfect: ['numbness', 'tingling', 'memory issues'],
+      partial: ['brain fog', 'balance problems', 'mood changes', 'fatigue'],
+    },
+    relatedGoals: ['goal_cognitive_1'],
+  },
+
+  {
+    issueId: 'COG-OMEGA-01',
+    title: 'Low Omega-3 Index',
+    category: 'cognitive',
+    basePriority: 60,
+    threshold: 0.55,
+    primaryBiomarkers: ['triglycerides', 'hscrp'],  // omega3_index not in normalizer; high TG + high hsCRP as proxy signals
+    supportingBiomarkers: ['homocysteine', 'esr'],
+    labThresholds: {
+      triglycerides: { optimalMax: 100, normalMax: 150, critical: 500 }, // mg/dL (elevated TG correlates with low omega-3)
+      hscrp: { optimalMax: 1.0, normalMax: 3.0, critical: 10.0 },       // mg/L
+    },
+    questionnaireFlags: {
+      conditions: ['depression', 'adhd', 'cognitive decline'],
+      familyHistory: ['dementia', 'alzheimers', 'cvd'],
+      symptoms: ['brain fog', 'poor concentration', 'mood changes'],
+      medications: ['fish oil', 'omega-3 supplement'],
+      dietFlags: ['vegan', 'vegetarian', 'no fish'],
+    },
+    wearableSignals: {
+      hrv_below: 35,
+    },
+    symptomMatches: {
+      perfect: ['brain fog', 'poor concentration'],
+      partial: ['mood changes', 'dry eyes', 'dry skin', 'fatigue'],
+    },
+    relatedGoals: ['goal_cognitive_1'],
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ENERGY / MITOCHONDRIAL (2)
+  // ═══════════════════════════════════════════════════════════════════════════
+  {
+    issueId: 'ENERGY-ANEMIA-01',
+    title: 'Subclinical Anemia',
+    category: 'energy',
+    basePriority: 70,
+    threshold: 0.55,
+    primaryBiomarkers: ['hemoglobin', 'rbc', 'mcv'],
+    supportingBiomarkers: ['ferritin', 'iron', 'transferrin_saturation', 'rdw', 'vitamin_b12', 'folate'],
+    labThresholds: {
+      hemoglobin: { optimalMin: 14.0, normalMin: 12.0, criticalMin: 8.0 }, // g/dL (using female lower bound; male optimalMin ~14.5)
+      mcv: { optimalMin: 82, optimalMax: 98, normalMin: 80, normalMax: 100, criticalMin: 70, critical: 115 }, // fL
+      rbc: { optimalMin: 4.2, optimalMax: 5.5, normalMin: 3.8, normalMax: 5.8, criticalMin: 3.0 }, // x10^6/uL
+      ferritin: { optimalMin: 50, normalMin: 20, criticalMin: 10 },    // ng/mL
+    },
+    questionnaireFlags: {
+      conditions: ['anemia', 'iron deficiency', 'thalassemia trait'],
+      familyHistory: ['anemia', 'thalassemia'],
+      symptoms: ['fatigue', 'weakness', 'shortness of breath', 'pale skin'],
+      medications: ['iron supplement', 'b12 injection'],
+      dietFlags: ['vegan', 'vegetarian'],
+    },
+    wearableSignals: {
+      resting_hr_above: 82,
+      hrv_below: 28,
+      steps_below: 4000,
+    },
+    symptomMatches: {
+      perfect: ['fatigue', 'weakness', 'shortness of breath'],
+      partial: ['pale skin', 'dizziness', 'cold hands', 'brittle nails', 'headache'],
+    },
+    relatedGoals: ['goal_energy_1'],
+  },
+
+  {
+    issueId: 'ENERGY-MITO-01',
+    title: 'Mitochondrial Stress Markers',
+    category: 'energy',
+    basePriority: 55,
+    threshold: 0.60,
+    primaryBiomarkers: ['magnesium'],  // lactate, coq10 not in normalizer; magnesium is key mitochondrial cofactor
+    supportingBiomarkers: ['vitamin_b6', 'ferritin', 'vitamin_d', 'hemoglobin'],
+    labThresholds: {
+      magnesium: { optimalMin: 2.0, normalMin: 1.7, criticalMin: 1.3 }, // mg/dL
+      vitamin_b6: { optimalMin: 20, normalMin: 5, criticalMin: 3 },     // ng/mL
+    },
+    questionnaireFlags: {
+      conditions: ['chronic fatigue', 'fibromyalgia', 'mitochondrial disease'],
+      familyHistory: [],
+      symptoms: ['exercise intolerance', 'chronic fatigue', 'muscle weakness'],
+      medications: ['coq10', 'l-carnitine', 'b-complex'],
+      dietFlags: [],
+    },
+    wearableSignals: {
+      hrv_below: 25,
+      resting_hr_above: 80,
+      steps_below: 3000,
+      sleep_below: 6,
+    },
+    symptomMatches: {
+      perfect: ['exercise intolerance', 'chronic fatigue'],
+      partial: ['muscle weakness', 'brain fog', 'shortness of breath', 'post-exertional malaise'],
+    },
+    relatedGoals: ['goal_energy_1'],
+  },
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ADDITIONAL METABOLIC (2)
+  // ═══════════════════════════════════════════════════════════════════════════
+  {
+    issueId: 'MET-URIC-01',
+    title: 'Elevated Uric Acid',
+    category: 'metabolic',
+    basePriority: 60,
+    threshold: 0.55,
+    primaryBiomarkers: ['uric_acid'],
+    supportingBiomarkers: ['creatinine', 'egfr', 'insulin_fasting', 'triglycerides', 'uric_acid_hdl_ratio'],
+    labThresholds: {
+      uric_acid: { optimalMax: 6.0, normalMax: 7.0, critical: 9.0 },  // mg/dL
+      creatinine: { optimalMax: 1.1, normalMax: 1.3, critical: 2.0 }, // mg/dL
+    },
+    questionnaireFlags: {
+      conditions: ['gout', 'kidney stones', 'ckd'],
+      familyHistory: ['gout', 'kidney stones'],
+      symptoms: ['joint pain', 'swelling', 'kidney stones'],
+      medications: ['allopurinol', 'febuxostat', 'colchicine'],
+      dietFlags: [],
+    },
+    wearableSignals: {
+      resting_hr_above: 78,
+    },
+    symptomMatches: {
+      perfect: ['joint pain', 'gout flare'],
+      partial: ['swelling', 'kidney stones', 'fatigue'],
+    },
+    relatedGoals: ['goal_metabolic_1'],
+  },
+
+  {
+    issueId: 'MET-CORTISOL-01',
+    title: 'Adrenal Dysregulation',
+    category: 'metabolic',
+    basePriority: 60,
+    threshold: 0.55,
+    primaryBiomarkers: ['cortisol', 'dhea_s'],
+    supportingBiomarkers: ['testosterone_total', 'glucose_fasting', 'insulin_fasting', 'hscrp'],
+    labThresholds: {
+      cortisol: { optimalMin: 6, optimalMax: 18, normalMin: 4, normalMax: 22, criticalMin: 3, critical: 30 }, // mcg/dL (morning)
+      dhea_s: { optimalMin: 200, normalMin: 100, criticalMin: 50 },    // µg/dL (sex-dependent; general reference)
+    },
+    questionnaireFlags: {
+      conditions: ['adrenal fatigue', 'chronic stress', 'cushings', 'addisons'],
+      familyHistory: ['autoimmune'],
+      symptoms: ['fatigue', 'weight gain', 'anxiety', 'poor stress tolerance'],
+      medications: ['prednisone', 'hydrocortisone', 'dhea'],
+      dietFlags: [],
+    },
+    wearableSignals: {
+      hrv_below: 28,
+      sleep_below: 6,
+      resting_hr_above: 80,
+    },
+    symptomMatches: {
+      perfect: ['fatigue', 'poor stress tolerance'],
+      partial: ['weight gain', 'anxiety', 'brain fog', 'mood changes', 'insomnia'],
+    },
+    relatedGoals: ['goal_hormonal_1'],
+  },
 ]
 
 

@@ -10,6 +10,7 @@ const { buildDoctorSystemPrompt } = require("../prompts/doctorChat");
 const { buildContextMessages } = require("../utils/context");
 const { streamChat, getProvider, getModelName } = require("../providers/ai");
 const { runPostProcessing } = require("../services/postProcessing");
+const { deduplicateProtocol } = require("../utils/protocolDedup");
 
 // Import 8 tools (no memory tools — doctors don't write to patient memory)
 const { definition: getMedicalDataDef, execute: getMedicalDataExec } = require("../tools/getMedicalData");
@@ -533,6 +534,8 @@ const getPatientActionPlan = async (req, res, next) => {
       .select("scores biomarkerPanel reportDate filename")
       .lean();
 
+    const deduplicatedProtocol = deduplicateProtocol(plan.goalIds || []);
+
     res.sendSuccess({
       _id: plan._id,
       status: plan.status,
@@ -540,6 +543,12 @@ const getPatientActionPlan = async (req, res, next) => {
       healthReport: plan.healthReport,
       goals: plan.goalIds || [],
       protocol: plan.protocol,
+      deduplicatedProtocol,
+      clinicalThesis: plan.clinicalThesis,
+      checkpoints: plan.checkpoints,
+      watchOuts: plan.watchOuts,
+      dailySchedule: plan.dailySchedule,
+      trainingProtocol: plan.trainingProtocol,
       nextSteps: plan.nextSteps,
       reportId: plan.reportId,
       generatedAt: plan.generatedAt,
@@ -696,6 +705,16 @@ const approveActionPlan = async (req, res, next) => {
 
     if (!plan) {
       return res.sendError("No action plan pending approval", 404);
+    }
+
+    const activeGoalCount = await Goal.countDocuments({
+      reportId: plan.reportId,
+      userId: patientId,
+      deletedByDoctor: { $ne: true },
+    });
+
+    if (activeGoalCount === 0) {
+      return res.sendError("Cannot approve — no goals exist. Add at least one goal first.", 400);
     }
 
     await ActionPlan.findByIdAndUpdate(plan._id, {

@@ -11,6 +11,9 @@ const biomarkerEvidenceSchema = new mongoose.Schema(
     referenceMax: { type: Number, default: null },
     optimalMin: { type: Number, default: null },
     optimalMax: { type: Number, default: null },
+    targetValue: { type: Number, default: null },
+    targetDate: { type: String, default: null },
+    trend: { type: String, enum: ["improving", "stable", "worsening", null], default: null },
   },
   { _id: false }
 );
@@ -81,6 +84,18 @@ const goalSchema = new mongoose.Schema(
     protocolItems: [protocolItemSchema],
     delta: { type: deltaSchema, default: () => ({ status: "new" }) },
 
+    status: {
+      type: String,
+      enum: ["active", "achieved", "paused", "archived"],
+      default: "active",
+    },
+    achievementCriteria: [{
+      biomarkerName: { type: String },
+      operator: { type: String, enum: ["<", "<=", ">", ">=", "within_range"] },
+      threshold: { type: Number },
+      currentlyMet: { type: Boolean, default: false },
+    }],
+
     editedByDoctor: { type: Boolean, default: false },
     addedByDoctor: { type: Boolean, default: false },
     deletedByDoctor: { type: Boolean, default: false },
@@ -88,6 +103,7 @@ const goalSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+goalSchema.index({ userId: 1, status: 1 });
 goalSchema.index({ userId: 1, reportId: 1 });
 goalSchema.index({ userId: 1, createdAt: -1 });
 goalSchema.index({ reportId: 1, goalId: 1 }, { unique: true });

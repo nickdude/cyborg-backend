@@ -24,6 +24,7 @@ RULES:
 - Keep summary to 2-3 sentences
 - Keep whatThisMeans to 3-5 sentences
 - Keep potentialCauses to 2-4 sentences
+- For each goal, generate 1-3 achievementCriteria based on the primary biomarkers. These define when the goal is considered achieved. Also generate biomarkerTargets with realistic target values and expected timeline.
 
 OUTPUT FORMAT:
 Return ONLY a valid JSON array. No markdown, no explanation, no code fences. Just the raw JSON array.`
@@ -46,6 +47,12 @@ Return a JSON array with one object per goal. Each object must have exactly thes
     "potentialCauses": "2-4 sentence root cause analysis referencing patient's diet, lifestyle, genetics",
     "recommendedActions": [
       { "number": 1, "label": "Action category name", "detail": "Specific personalized action text" }
+    ],
+    "achievementCriteria": [
+      { "biomarkerName": "string — canonical biomarker name", "operator": "< or <= or > or >=", "threshold": 0 }
+    ],
+    "biomarkerTargets": [
+      { "canonicalName": "string", "targetValue": 0, "targetDate": "Week 12" }
     ]
   }
 ]
@@ -154,6 +161,8 @@ function generateFallbackNarratives(goalSkeletons) {
         { number: 2, label: 'Lifestyle modification', detail: 'Focus on improving diet quality, regular exercise, and sleep optimization to support your biomarker improvement.' },
         { number: 3, label: 'Follow-up testing', detail: 'Retest these markers in 8-12 weeks to track your progress and adjust your protocol as needed.' },
       ],
+      achievementCriteria: [],
+      biomarkerTargets: [],
     }
   })
 }
@@ -195,7 +204,11 @@ async function generateNarratives(goalSkeletons, patientContext) {
 
       if (errors.length === 0) {
         console.log(`[GoalNarrative] Valid JSON received on attempt ${attempt + 1}`)
-        return parsed
+        return parsed.map(item => ({
+          ...item,
+          achievementCriteria: item.achievementCriteria || [],
+          biomarkerTargets: item.biomarkerTargets || [],
+        }))
       }
 
       console.warn(`[GoalNarrative] Validation errors on attempt ${attempt + 1}:`, errors)

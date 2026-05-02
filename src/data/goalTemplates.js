@@ -377,6 +377,198 @@ const GOAL_TEMPLATES = [
     ],
     goalAlignmentKeywords: ['body composition', 'muscle', 'fat loss', 'weight', 'lean', 'strength', 'fitness'],
   },
+
+  // ── 12. Sleep ──────────────────────────────────────────────────────
+  {
+    goalId: 'goal_sleep_1',
+    title: 'Optimize your sleep quality',
+    healthImpact: 'Sleep restoration',
+    category: 'sleep',
+    recoveryTimeWeeks: [4, 12],
+    linkedIssues: ['SLEEP-MELATONIN-01', 'SLEEP-CORTISOL-01', 'SLEEP-IRON-01'],
+    protocolItems: [
+      {
+        productName: 'Magnesium L-Threonate',
+        triggerBiomarkers: ['magnesium', 'cortisol'],
+        contraindications: { medications: [], allergies: [] },
+        dosing: '200-400 mg elemental magnesium, 30-60 minutes before bed.',
+      },
+      {
+        productName: 'Apigenin',
+        triggerBiomarkers: ['cortisol'],
+        contraindications: { medications: ['sedative', 'benzodiazepine'], allergies: [] },
+        dosing: '50 mg, 30-60 minutes before bed.',
+      },
+      {
+        productName: 'L-Theanine',
+        triggerBiomarkers: ['cortisol'],
+        contraindications: { medications: [], allergies: [] },
+        dosing: '200-400 mg, 30-60 minutes before bed.',
+      },
+    ],
+    goalAlignmentKeywords: ['sleep', 'insomnia', 'rest', 'recovery', 'circadian'],
+  },
+
+  // ── 13. Bone Health ────────────────────────────────────────────────
+  {
+    goalId: 'goal_bone_1',
+    title: 'Strengthen your bones',
+    healthImpact: 'Bone density support',
+    category: 'bone',
+    recoveryTimeWeeks: [12, 24],
+    linkedIssues: ['BONE-VITD-01', 'BONE-PTH-01'],
+    protocolItems: [
+      {
+        productName: 'Vitamin D3 + K2',
+        triggerBiomarkers: ['vitamin_d', 'calcium', 'pth'],
+        contraindications: { medications: ['anticoagulant'], allergies: [] },
+        dosing: '5,000 IU D3 + 100 mcg K2 (MK-7) daily with a fat-containing meal.',
+      },
+      {
+        productName: 'Calcium Citrate',
+        triggerBiomarkers: ['calcium'],
+        contraindications: { medications: ['thiazide'], allergies: [] },
+        dosing: '500 mg twice daily with food. Do not exceed 1,000 mg/day from supplements.',
+      },
+      {
+        productName: 'Magnesium Glycinate',
+        triggerBiomarkers: ['magnesium'],
+        contraindications: { medications: [], allergies: [] },
+        dosing: '400 mg elemental magnesium at bedtime.',
+      },
+    ],
+    goalAlignmentKeywords: ['bone', 'osteoporosis', 'fracture', 'calcium', 'density'],
+  },
+
+  // ── 14. Immune Function ────────────────────────────────────────────
+  {
+    goalId: 'goal_immune_1',
+    title: 'Boost your immune resilience',
+    healthImpact: 'Immune support',
+    category: 'immune',
+    recoveryTimeWeeks: [6, 12],
+    linkedIssues: ['IMM-WBC-01', 'IMM-ZINC-01'],
+    protocolItems: [
+      {
+        productName: 'Zinc Bisglycinate',
+        triggerBiomarkers: ['zinc', 'wbc', 'lymphocytes'],
+        contraindications: { medications: [], allergies: [] },
+        dosing: '15-30 mg elemental zinc daily with food. Take with copper (2 mg) if using >15 mg.',
+      },
+      {
+        productName: 'Vitamin C',
+        triggerBiomarkers: ['wbc', 'lymphocytes'],
+        contraindications: { medications: [], allergies: [] },
+        dosing: '500-1,000 mg daily, split into 2 doses.',
+      },
+      {
+        productName: 'Vitamin D3 + K2',
+        triggerBiomarkers: ['vitamin_d'],
+        contraindications: { medications: [], allergies: [] },
+        dosing: '5,000 IU D3 + 100 mcg K2 daily with a fat-containing meal.',
+      },
+    ],
+    goalAlignmentKeywords: ['immune', 'immunity', 'infection', 'sick', 'cold', 'flu', 'healing'],
+  },
+
+  // ── 15. Cognitive Health ───────────────────────────────────────────
+  {
+    goalId: 'goal_cognitive_1',
+    title: 'Sharpen your cognitive performance',
+    healthImpact: 'Brain health',
+    category: 'cognitive',
+    recoveryTimeWeeks: [8, 16],
+    linkedIssues: ['COG-B12-01', 'COG-OMEGA-01'],
+    protocolItems: [
+      {
+        productName: 'Pro-Resolve Omega (EPA/DHA)',
+        triggerBiomarkers: ['omega3_index', 'triglycerides'],
+        contraindications: { medications: ['anticoagulant', 'warfarin'], allergies: ['fish', 'shellfish'] },
+        dosing: '2 g EPA+DHA daily with a meal. Higher EPA ratio preferred for neuroprotection.',
+      },
+      {
+        productName: 'Methylcobalamin B12',
+        triggerBiomarkers: ['vitamin_b12', 'methylmalonic_acid', 'homocysteine'],
+        contraindications: { medications: [], allergies: [] },
+        dosing: '1,000-5,000 mcg sublingual daily. Use methylcobalamin form, not cyanocobalamin.',
+      },
+      {
+        productName: 'Lion\'s Mane Extract',
+        triggerBiomarkers: [],
+        contraindications: { medications: ['immunosuppressant'], allergies: ['mushroom'] },
+        dosing: '500-1,000 mg daily with food.',
+      },
+    ],
+    goalAlignmentKeywords: ['brain', 'cognitive', 'memory', 'focus', 'mental', 'concentration', 'brain fog'],
+  },
+
+  // ── 16. Energy / Mitochondrial ─────────────────────────────────────
+  {
+    goalId: 'goal_energy_1',
+    title: 'Restore your cellular energy',
+    healthImpact: 'Energy optimization',
+    category: 'energy',
+    recoveryTimeWeeks: [6, 12],
+    linkedIssues: ['ENERGY-ANEMIA-01', 'ENERGY-MITO-01', 'ENERGY-FATIGUE-01'],
+    protocolItems: [
+      {
+        productName: 'NMN (Nicotinamide Mononucleotide)',
+        triggerBiomarkers: ['lactate'],
+        contraindications: { medications: [], allergies: [] },
+        dosing: '300-600 mg daily, taken in the morning on an empty stomach.',
+      },
+      {
+        productName: 'CoQ10 (Ubiquinol)',
+        triggerBiomarkers: ['coq10', 'creatine_kinase'],
+        contraindications: { medications: ['anticoagulant'], allergies: [] },
+        dosing: '100-200 mg daily with a fat-containing meal.',
+      },
+      {
+        productName: 'OptiFerin-C (Iron Bisglycinate)',
+        triggerBiomarkers: ['ferritin', 'hemoglobin', 'iron'],
+        contraindications: { medications: [], allergies: [] },
+        dosing: '25 mg elemental iron every other day on an empty stomach with vitamin C.',
+      },
+      {
+        productName: 'Creatine HCL',
+        triggerBiomarkers: ['creatine_kinase'],
+        contraindications: { medications: [], allergies: [] },
+        dosing: '3-5 g daily, any time. Supports ATP production and cognitive function.',
+      },
+    ],
+    goalAlignmentKeywords: ['energy', 'fatigue', 'tired', 'exhaustion', 'mitochondria', 'stamina'],
+  },
+
+  // ── 17. Stress / Adrenal ───────────────────────────────────────────
+  {
+    goalId: 'goal_stress_1',
+    title: 'Rebalance your stress response',
+    healthImpact: 'Stress management',
+    category: 'stress',
+    recoveryTimeWeeks: [8, 16],
+    linkedIssues: ['MET-CORTISOL-01', 'SLEEP-CORTISOL-01'],
+    protocolItems: [
+      {
+        productName: 'Ashwagandha (KSM-66)',
+        triggerBiomarkers: ['cortisol', 'dhea_s'],
+        contraindications: { medications: ['thyroid medication', 'levothyroxine', 'immunosuppressant'], allergies: ['nightshade'] },
+        dosing: '300-600 mg daily, standardized to 5% withanolides. Take with food.',
+      },
+      {
+        productName: 'Magnesium Glycinate',
+        triggerBiomarkers: ['magnesium', 'cortisol'],
+        contraindications: { medications: [], allergies: [] },
+        dosing: '400 mg elemental magnesium at bedtime.',
+      },
+      {
+        productName: 'L-Theanine',
+        triggerBiomarkers: ['cortisol'],
+        contraindications: { medications: [], allergies: [] },
+        dosing: '200 mg 1-2x daily. Promotes calm focus without drowsiness.',
+      },
+    ],
+    goalAlignmentKeywords: ['stress', 'anxiety', 'cortisol', 'adrenal', 'burnout', 'overwhelm', 'nervous'],
+  },
 ];
 
 

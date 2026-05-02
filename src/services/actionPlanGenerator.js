@@ -32,7 +32,29 @@ function mapSkeletonsToBiomarkerEvidence(goalSkeletons, narratives) {
     const narrative = narrativeMap[skeleton.goalId];
     const hasNarrative = narrative != null;
 
-    return {
+    const biomarkerEvidence = (skeleton.biomarkersToImprove || []).map((bm) => ({
+      name: bm.displayName || bm.canonicalName,
+      canonicalName: bm.canonicalName,
+      flag: bm.optimalFlag || bm.flag || "Normal",
+      value: bm.numericValue,
+      unit: bm.unit || "",
+      referenceMin: bm.referenceMin ?? null,
+      referenceMax: bm.referenceMax ?? null,
+      optimalMin: bm.optimalMin ?? null,
+      optimalMax: bm.optimalMax ?? null,
+    }));
+
+    // Merge targetValue/targetDate from narrative biomarkerTargets
+    const targets = hasNarrative ? narrative.biomarkerTargets || [] : [];
+    for (const target of targets) {
+      const bm = biomarkerEvidence.find(b => b.canonicalName === target.canonicalName);
+      if (bm) {
+        bm.targetValue = target.targetValue;
+        bm.targetDate = target.targetDate;
+      }
+    }
+
+    const result = {
       goalId: skeleton.goalId,
       title: skeleton.title,
       priority: skeleton.priority,
@@ -43,17 +65,8 @@ function mapSkeletonsToBiomarkerEvidence(goalSkeletons, narratives) {
       whatThisMeans: hasNarrative ? narrative.whatThisMeans || "" : "",
       potentialCauses: hasNarrative ? narrative.potentialCauses || "" : "",
       recommendedActions: hasNarrative ? narrative.recommendedActions || [] : [],
-      biomarkerEvidence: (skeleton.biomarkersToImprove || []).map((bm) => ({
-        name: bm.displayName || bm.canonicalName,
-        canonicalName: bm.canonicalName,
-        flag: bm.optimalFlag || bm.flag || "Normal",
-        value: bm.numericValue,
-        unit: bm.unit || "",
-        referenceMin: bm.referenceMin ?? null,
-        referenceMax: bm.referenceMax ?? null,
-        optimalMin: bm.optimalMin ?? null,
-        optimalMax: bm.optimalMax ?? null,
-      })),
+      achievementCriteria: hasNarrative ? narrative.achievementCriteria || [] : [],
+      biomarkerEvidence,
       protocolItems: (skeleton.protocolItems || []).map((pi) => ({
         productName: pi.productName,
         dosing: pi.dosing,
@@ -61,6 +74,8 @@ function mapSkeletonsToBiomarkerEvidence(goalSkeletons, narratives) {
       })),
       _narrativeMissing: !hasNarrative,
     };
+
+    return result;
   });
 }
 
@@ -167,7 +182,13 @@ async function saveGoals(goalsWithDeltas, userId, reportId) {
   for (const goal of goalsWithDeltas) {
     const doc = await Goal.findOneAndUpdate(
       { reportId, goalId: goal.goalId },
-      { userId, reportId, ...goal },
+      {
+        userId,
+        reportId,
+        ...goal,
+        achievementCriteria: goal.achievementCriteria || [],
+        status: goal.status || "active",
+      },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
     saved.push(doc);
@@ -208,7 +229,7 @@ async function triggerGoalsAndActionPlan(userId, reportId, planId) {
     const mergedGoals = mapSkeletonsToBiomarkerEvidence(goalSkeletons, narratives);
 
     // Step 5: Compute deltas vs previous goals
-    const { goals: goalsWithDeltas } = computeDeltas(mergedGoals, previousGoals);
+    const { goals: goalsWithDeltas } = computeDeltas(mergedGoals, previousGoals, biomarkerPanel);
 
     // Step 6: Save Goal documents (sequential to avoid hammering DB)
     console.log(`[ActionPlan] Saving ${goalsWithDeltas.length} goals...`);
@@ -234,13 +255,28 @@ async function triggerGoalsAndActionPlan(userId, reportId, planId) {
     const overview = buildOverview(user, reportData);
     const healthReport = buildHealthReport(reportData);
 
+    const fullUser = await User.findById(userId).select("linkedDoctor").lean();
+    const hasDoctor = !!fullUser?.linkedDoctor;
+    const hasGoals = goalIds.length > 0;
+
+    // Status decision:
+    // - No goals → "ready" (nothing for doctor to review)
+    // - Goals but no linked doctor → "ready" (no doctor to review)
+    // - Goals + linked doctor → "pending_review"
+    const planStatus = hasGoals && hasDoctor ? "pending_review" : "ready";
+
     const planUpdate = {
-      status: "pending_review",
+      status: planStatus,
       goalIds,
       previousPlanId: previousPlan?._id || null,
       overview,
       healthReport,
       protocol: protocolResult.protocol || {},
+      clinicalThesis: protocolResult.clinicalThesis || { title: "", reasoning: "" },
+      checkpoints: protocolResult.checkpoints || [],
+      watchOuts: protocolResult.watchOuts || [],
+      dailySchedule: protocolResult.dailySchedule || {},
+      trainingProtocol: protocolResult.trainingProtocol || {},
       nextSteps: {
         followUpTimeline: protocolResult.nextSteps?.followUpTimeline || "Re-test in 3 months",
         text: protocolResult.nextSteps?.text || "",
@@ -263,11 +299,18 @@ async function triggerGoalsAndActionPlan(userId, reportId, planId) {
 
     await ActionPlan.findByIdAndUpdate(planId, planUpdate);
 
-    // Step 9: Notify patient (awaiting review) + doctor (ready for review)
-    await notify(userId, "goals:awaiting_review", { planId, reportId });
-    await notifyDoctor(userId, "doctor:goals_ready_for_review", { planId, reportId });
+    // Step 9: Notify based on plan status
+    if (planStatus === "pending_review") {
+      await notify(userId, "goals:awaiting_review", { planId, reportId });
+      await notifyDoctor(userId, "doctor:goals_ready_for_review", { planId, reportId });
+    } else {
+      // No doctor or no goals — patient gets direct access
+      await User.findByIdAndUpdate(userId, { actionPlanReady: true });
+      await notify(userId, "action_plan:ready", { planId, reportId });
+      console.log(`[ActionPlan] No doctor review needed (hasGoals=${hasGoals}, hasDoctor=${hasDoctor})`);
+    }
 
-    console.log(`[ActionPlan] Generation complete for plan=${planId}`);
+    console.log(`[ActionPlan] Generation complete for plan=${planId} status=${planStatus}`);
   } catch (error) {
     console.error(`[ActionPlan] Generation failed for plan=${planId}:`, error.message);
     await ActionPlan.findByIdAndUpdate(planId, {

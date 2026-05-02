@@ -1,29 +1,40 @@
 const express = require("express");
 const router = express.Router();
+const { rateLimit } = require("express-rate-limit");
 const userController = require("../controllers/userController");
 const reportController = require("../controllers/reportController");
-const { verifyToken, checkRole } = require("../middlewares/authMiddleware");
+const { verifyToken, checkRole, checkOwnership } = require("../middlewares/authMiddleware");
 const upload = require("../config/multer");
+
+const uploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  message: { success: false, message: "Upload limit reached. Try again in an hour." },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // Get all users (for doctor dashboard)
 router.get("/", verifyToken, checkRole(["doctor"]), userController.getAllUsers);
 
 // Get user profile
-router.get("/:userId/profile", verifyToken, userController.getUserProfile);
+router.get("/:userId/profile", verifyToken, checkOwnership, userController.getUserProfile);
 
 // Update user profile
-router.put("/:userId/profile", verifyToken, userController.updateUserProfile);
+router.put("/:userId/profile", verifyToken, checkOwnership, userController.updateUserProfile);
 
 // ============== ONBOARDING ==============
 router.post(
   "/:userId/onboarding",
   verifyToken,
+  checkOwnership,
   userController.saveOnboardingAnswers
 );
 
 router.get(
   "/:userId/onboarding",
   verifyToken,
+  checkOwnership,
   userController.getOnboardingAnswers
 );
 
@@ -31,12 +42,14 @@ router.get(
 router.post(
   "/:userId/hear-about-us",
   verifyToken,
+  checkOwnership,
   userController.saveReferralSource
 );
 
 router.get(
   "/:userId/hear-about-us",
   verifyToken,
+  checkOwnership,
   userController.getReferralSource
 );
 
@@ -44,6 +57,7 @@ router.get(
 router.post(
   "/:userId/welcome-seen",
   verifyToken,
+  checkOwnership,
   userController.markWelcomeSeen
 );
 
@@ -78,6 +92,8 @@ router.post(
   "/:userId/blood-reports",
   verifyToken,
   checkRole(["user"]),
+  checkOwnership,
+  uploadLimiter,
   upload.single("file"),
   reportController.uploadReport
 );
@@ -85,6 +101,7 @@ router.post(
 router.get(
   "/:userId/blood-reports",
   verifyToken,
+  checkOwnership,
   reportController.listReports
 );
 
@@ -110,6 +127,7 @@ router.delete(
   "/:userId/blood-reports/:reportId",
   verifyToken,
   checkRole(["user"]),
+  checkOwnership,
   reportController.deleteReport
 );
 

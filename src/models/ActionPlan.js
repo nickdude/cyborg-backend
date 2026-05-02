@@ -7,6 +7,11 @@ const supplementSchema = new mongoose.Schema(
     whatItIs: { type: String },
     whyItMatters: { type: String },
     howToTake: { type: String },
+    timing: {
+      type: String,
+      enum: ["morning_fasted", "with_breakfast", "pre_workout", "with_dinner", "bedtime", "with_food", "anytime"],
+      default: "with_food",
+    },
   },
   { _id: false }
 );
@@ -25,6 +30,72 @@ const recommendedProductSchema = new mongoose.Schema(
     productName: { type: String },
     dose: { type: String },
     price: { type: Number, default: null },
+    imageUrl: { type: String, default: null },
+  },
+  { _id: false }
+);
+
+const checkpointSchema = new mongoose.Schema(
+  {
+    weekNumber: { type: Number },
+    label: { type: String },
+    description: { type: String },
+    targetBiomarkers: [{
+      name: { type: String },
+      currentValue: { type: Number },
+      targetValue: { type: Number },
+      unit: { type: String },
+    }],
+  },
+  { _id: false }
+);
+
+const watchOutSchema = new mongoose.Schema(
+  {
+    title: { type: String },
+    risk: { type: String },
+    mitigation: { type: String },
+    severity: { type: String, enum: ["info", "warning", "critical"], default: "warning" },
+  },
+  { _id: false }
+);
+
+const exerciseSchema = new mongoose.Schema(
+  {
+    name: { type: String },
+    sets: { type: Number },
+    reps: { type: String },
+    cue: { type: String },
+  },
+  { _id: false }
+);
+
+const trainingDaySchema = new mongoose.Schema(
+  {
+    dayLabel: { type: String },
+    focus: { type: String },
+    exercises: [exerciseSchema],
+  },
+  { _id: false }
+);
+
+const trainingPhaseSchema = new mongoose.Schema(
+  {
+    phaseNumber: { type: Number },
+    weeks: { type: String },
+    focus: { type: String },
+    tempo: { type: String },
+    rest: { type: String },
+    days: [trainingDaySchema],
+  },
+  { _id: false }
+);
+
+const scheduleItemSchema = new mongoose.Schema(
+  {
+    productName: { type: String },
+    dose: { type: String },
+    reason: { type: String },
   },
   { _id: false }
 );
@@ -114,6 +185,42 @@ const actionPlanSchema = new mongoose.Schema(
         default:
           "This report is not intended to diagnose or treat disease, or to substitute a physician's consultation. Review these results with your doctor.",
       },
+    },
+
+    // Section 6: Clinical Thesis
+    clinicalThesis: {
+      title: { type: String, default: "" },
+      reasoning: { type: String, default: "" },
+    },
+
+    // Section 7: Phased Checkpoints
+    checkpoints: [checkpointSchema],
+
+    // Section 8: Clinical Watch-Outs
+    watchOuts: [watchOutSchema],
+
+    // Section 9: Daily Supplement Schedule
+    dailySchedule: {
+      morningFasted: [scheduleItemSchema],
+      withBreakfast: [scheduleItemSchema],
+      preWorkout: [scheduleItemSchema],
+      withDinner: [scheduleItemSchema],
+      bedtime: [scheduleItemSchema],
+    },
+
+    // Section 10: Training Protocol
+    trainingProtocol: {
+      goal: { type: String, default: "" },
+      weeklySchedule: { type: String, default: "" },
+      phases: [trainingPhaseSchema],
+      zone2: {
+        protocol: { type: String },
+        intensity: { type: String },
+        options: [{ type: String }],
+        reasoning: { type: String },
+      },
+      warmUp: [{ type: String }],
+      coolDown: [{ type: String }],
     },
 
     // Backward compat for current frontend

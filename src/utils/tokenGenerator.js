@@ -2,9 +2,9 @@
 
 const crypto = require("crypto");
 
-// Generate 6-digit OTP
+// Generate 6-digit OTP (cryptographically secure)
 const generateOTP = () => {
-  return Math.floor(100000 + Math.random() * 900000).toString();
+  return crypto.randomInt(100000, 999999).toString();
 };
 
 // Generate reset token

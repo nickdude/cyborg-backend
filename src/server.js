@@ -148,7 +148,34 @@ connectDB().then(() => {
     console.error("[SchemaBuilder] Init failed:", err.message)
   );
 
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
   });
+
+  const shutdown = (signal) => {
+    console.log(`\n[${signal}] Shutting down gracefully...`);
+    server.close(() => {
+      console.log("[Shutdown] HTTP server closed");
+      const mongoose = require("mongoose");
+      mongoose.connection.close(false).then(() => {
+        console.log("[Shutdown] MongoDB disconnected");
+        process.exit(0);
+      });
+    });
+    setTimeout(() => {
+      console.error("[Shutdown] Forced exit after 30s timeout");
+      process.exit(1);
+    }, 30000);
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+});
+
+process.on("unhandledRejection", (err) => {
+  console.error("[Fatal] Unhandled rejection:", err);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("[Fatal] Uncaught exception:", err);
+  process.exit(1);
 });

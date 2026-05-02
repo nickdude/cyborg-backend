@@ -86,8 +86,7 @@ const register = async (req, res, next) => {
         });
       }
 
-      // For phone, log OTP
-      if (phone) {
+      if (phone && process.env.NODE_ENV !== "production") {
         console.log(`[OTP for ${phone}]: ${otp}`);
       }
 
@@ -149,8 +148,7 @@ const register = async (req, res, next) => {
       });
     }
 
-    // For phone, log OTP (in production, use SMS gateway)
-    if (phone) {
+    if (phone && process.env.NODE_ENV !== "production") {
       console.log(`[OTP for ${phone}]: ${otp}`);
     }
 

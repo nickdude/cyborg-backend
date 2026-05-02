@@ -22,13 +22,45 @@ function distanceFromOptimal(biomarker) {
   return (value - oMax) / range;
 }
 
-function computeDeltas(newGoals, previousGoals) {
+function evaluateOperator(value, operator, threshold) {
+  if (value == null || threshold == null) return false;
+  switch (operator) {
+    case "<": return value < threshold;
+    case "<=": return value <= threshold;
+    case ">": return value > threshold;
+    case ">=": return value >= threshold;
+    case "within_range": return value >= threshold * 0.9 && value <= threshold * 1.1;
+    default: return false;
+  }
+}
+
+function computeDeltas(newGoals, previousGoals, biomarkerPanel) {
   if (!previousGoals || previousGoals.length === 0) {
     return {
-      goals: newGoals.map((g) => ({
-        ...g,
-        delta: { status: "new", previousPriority: null, improvedBiomarkers: [], worsenedBiomarkers: [] },
-      })),
+      goals: newGoals.map((g) => {
+        const result = {
+          ...g,
+          delta: { status: "new", previousPriority: null, improvedBiomarkers: [], worsenedBiomarkers: [] },
+        };
+        // Evaluate achievement criteria against current biomarker panel
+        if (g.achievementCriteria?.length > 0 && biomarkerPanel) {
+          const allMet = g.achievementCriteria.every(criterion => {
+            const bm = biomarkerPanel.find(b =>
+              b.canonicalName === criterion.biomarkerName || b.displayName === criterion.biomarkerName
+            );
+            if (!bm?.numericValue) return false;
+            return evaluateOperator(bm.numericValue, criterion.operator, criterion.threshold);
+          });
+          result.status = allMet ? "achieved" : "active";
+          result.achievementCriteria = g.achievementCriteria.map(c => {
+            const bm = biomarkerPanel.find(b =>
+              b.canonicalName === c.biomarkerName || b.displayName === c.biomarkerName
+            );
+            return { ...c, currentlyMet: bm ? evaluateOperator(bm.numericValue, c.operator, c.threshold) : false };
+          });
+        }
+        return result;
+      }),
       resolvedGoalIds: [],
     };
   }
@@ -92,7 +124,7 @@ function computeDeltas(newGoals, previousGoals) {
       status = "unchanged";
     }
 
-    results.push({
+    const goalWithDelta = {
       ...goal,
       delta: {
         status,
@@ -100,7 +132,27 @@ function computeDeltas(newGoals, previousGoals) {
         improvedBiomarkers: improved,
         worsenedBiomarkers: worsened,
       },
-    });
+    };
+
+    // Evaluate achievement criteria against current biomarker panel
+    if (goal.achievementCriteria?.length > 0 && biomarkerPanel) {
+      const allMet = goal.achievementCriteria.every(criterion => {
+        const bm = biomarkerPanel.find(b =>
+          b.canonicalName === criterion.biomarkerName || b.displayName === criterion.biomarkerName
+        );
+        if (!bm?.numericValue) return false;
+        return evaluateOperator(bm.numericValue, criterion.operator, criterion.threshold);
+      });
+      goalWithDelta.status = allMet ? "achieved" : "active";
+      goalWithDelta.achievementCriteria = goal.achievementCriteria.map(c => {
+        const bm = biomarkerPanel.find(b =>
+          b.canonicalName === c.biomarkerName || b.displayName === c.biomarkerName
+        );
+        return { ...c, currentlyMet: bm ? evaluateOperator(bm.numericValue, c.operator, c.threshold) : false };
+      });
+    }
+
+    results.push(goalWithDelta);
   }
 
   const resolvedGoalIds = Object.keys(prevMap).filter(
@@ -110,4 +162,4 @@ function computeDeltas(newGoals, previousGoals) {
   return { goals: results, resolvedGoalIds };
 }
 
-module.exports = { computeDeltas, distanceFromOptimal };
+module.exports = { computeDeltas, distanceFromOptimal, evaluateOperator };

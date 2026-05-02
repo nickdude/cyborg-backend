@@ -26,6 +26,13 @@ RULES:
 - followUpTimeline: High issues = 6-8 weeks, Medium = 3 months, Low = 6 months. Use shortest if mixed.
 - Checklist: 3-5 concrete actionable items the patient should do immediately
 - Text: 2-3 sentence paragraph about scheduling follow-up and tracking progress
+- For each supplement in the protocol.supplements array, include a timing field: morning_fasted, with_breakfast, pre_workout, with_dinner, bedtime, with_food, or anytime
+- Generate a clinicalThesis: a 5-10 word title and 3-5 sentence reasoning explaining WHY these interventions work together for THIS patient
+- Generate 3-4 checkpoints at Week 4, 8, 12 (add Week 16 if any High-priority goals). Each checkpoint has a label, description, and 2-4 target biomarker values
+- Generate 2-4 clinical watchOuts based on the patient's conditions + supplement/lifestyle interactions. Include risk, mitigation action, and severity (info/warning/critical)
+- Map ALL supplement items to a dailySchedule with 5 circadian slots: morningFasted, withBreakfast, preWorkout, withDinner, bedtime. Each item has productName, dose, and a 1-sentence reason
+- Generate a 12-week trainingProtocol with 2-3 phases, each with specific exercises (name, sets, reps, cue). Include zone2 cardio, warmUp, and coolDown
+- Biomarker targets in checkpoints should use evidence-based improvement rates (e.g., LDL drops ~15-25% in 8-12 weeks with statin alternatives)
 
 OUTPUT FORMAT:
 Return ONLY valid JSON matching the schema below. No markdown, no explanation, no code fences.`;
@@ -86,6 +93,7 @@ Return a JSON object with this exact structure:
       {
         "name": "Product Name with dose",
         "dose": "dosing instruction",
+        "timing": "morning_fasted | with_breakfast | pre_workout | with_dinner | bedtime | with_food | anytime",
         "whatItIs": "1-2 sentence description",
         "whyItMatters": "1-2 sentence explanation personalized to patient's biomarkers",
         "howToTake": "1-2 sentence timing and practical instruction"
@@ -103,6 +111,47 @@ Return a JSON object with this exact structure:
     "followUpTimeline": "Re-test in X weeks/months",
     "text": "2-3 sentence guidance about follow-up and tracking progress",
     "checklist": [{ "text": "specific actionable item" }]
+  },
+  "clinicalThesis": {
+    "title": "string — 5-10 word thesis name",
+    "reasoning": "string — 3-5 sentences explaining WHY"
+  },
+  "checkpoints": [
+    {
+      "weekNumber": 4,
+      "label": "string — milestone name",
+      "description": "string — 1-2 sentence primary goal for this phase",
+      "targetBiomarkers": [{ "name": "string", "currentValue": 0, "targetValue": 0, "unit": "string" }]
+    }
+  ],
+  "watchOuts": [
+    { "title": "string", "risk": "string", "mitigation": "string", "severity": "warning|critical|info" }
+  ],
+  "dailySchedule": {
+    "morningFasted": [{ "productName": "string", "dose": "string", "reason": "string" }],
+    "withBreakfast": [{ "productName": "string", "dose": "string", "reason": "string" }],
+    "preWorkout": [{ "productName": "string", "dose": "string", "reason": "string" }],
+    "withDinner": [{ "productName": "string", "dose": "string", "reason": "string" }],
+    "bedtime": [{ "productName": "string", "dose": "string", "reason": "string" }]
+  },
+  "trainingProtocol": {
+    "goal": "string",
+    "weeklySchedule": "string",
+    "phases": [{
+      "phaseNumber": 1,
+      "weeks": "1-4",
+      "focus": "string",
+      "tempo": "string",
+      "rest": "string",
+      "days": [{
+        "dayLabel": "string",
+        "focus": "string",
+        "exercises": [{ "name": "string", "sets": 3, "reps": "10-12", "cue": "string" }]
+      }]
+    }],
+    "zone2": { "protocol": "string", "intensity": "string", "options": ["string"], "reasoning": "string" },
+    "warmUp": ["string"],
+    "coolDown": ["string"]
   }
 }
 
@@ -150,7 +199,7 @@ async function generateProtocol({ patientContext, goals, protocolItems, scores, 
       const rawOutput = await generateText({
         systemPrompt: SYSTEM_PROMPT,
         userPrompt: promptToUse,
-        maxTokens: 4096,
+        maxTokens: 8192,
       });
 
       const parsed = aiExtractJSON(rawOutput);
@@ -168,6 +217,11 @@ async function generateProtocol({ patientContext, goals, protocolItems, scores, 
       return {
         protocol: parsed.protocol || {},
         nextSteps: parsed.nextSteps || {},
+        clinicalThesis: parsed.clinicalThesis || { title: "", reasoning: "" },
+        checkpoints: parsed.checkpoints || [],
+        watchOuts: parsed.watchOuts || [],
+        dailySchedule: parsed.dailySchedule || {},
+        trainingProtocol: parsed.trainingProtocol || {},
       };
     } catch (error) {
       console.error(`[ActionPlanProtocol] Attempt ${attempt + 1} error:`, error.message);
@@ -188,6 +242,11 @@ async function generateProtocol({ patientContext, goals, protocolItems, scores, 
       text: "Schedule a follow-up blood panel to track your progress.",
       checklist: [],
     },
+    clinicalThesis: { title: "", reasoning: "" },
+    checkpoints: [],
+    watchOuts: [],
+    dailySchedule: {},
+    trainingProtocol: {},
   };
 }
 

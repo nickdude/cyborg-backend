@@ -34,7 +34,10 @@ const listGoals = async (req, res, next) => {
     }
 
     // approved or legacy "ready" — show goals
-    const persistedGoals = await Goal.find({ userId, deletedByDoctor: { $ne: true } })
+    const filter = { userId, deletedByDoctor: { $ne: true } };
+    if (req.query.status) filter.status = req.query.status;
+
+    const persistedGoals = await Goal.find(filter)
       .sort({ createdAt: -1 })
       .limit(8)
       .lean();
