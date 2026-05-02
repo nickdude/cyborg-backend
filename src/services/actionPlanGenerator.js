@@ -11,7 +11,7 @@ const { buildPatientContext } = require("../utils/goalHelpers");
 const { computeDeltas } = require("./deltaTracker");
 const { generateProtocol } = require("../prompts/actionPlanProtocol");
 
-const AI_CALL_TIMEOUT_MS = 120_000;
+const AI_CALL_TIMEOUT_MS = 600_000;
 
 function withTimeout(promise, ms, label) {
   return Promise.race([

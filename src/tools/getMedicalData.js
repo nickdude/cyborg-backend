@@ -1,6 +1,8 @@
 const mongoose = require("mongoose");
 const User = require("../models/User");
 const ReportData = require("../models/ReportData");
+const ActionPlan = require("../models/ActionPlan");
+const Goal = require("../models/Goal");
 
 // Map numeric question keys (questionsVersion 2.0) to readable labels
 const QUESTION_KEY_MAP = {
@@ -227,6 +229,65 @@ async function execute(input, userId, chatId) {
         }
       }
     }
+  }
+
+  // Action plan + goals (if approved/ready)
+  try {
+    const plan = await ActionPlan.findOne({
+      userId: new mongoose.Types.ObjectId(userId),
+      status: { $in: ["ready", "approved"] },
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    if (plan) {
+      const goals = await Goal.find({
+        userId: new mongoose.Types.ObjectId(userId),
+        reportId: plan.reportId,
+        deletedByDoctor: { $ne: true },
+      }).lean();
+
+      result.actionPlan = {
+        status: plan.status,
+        generatedAt: plan.generatedAt,
+        clinicalThesis: plan.clinicalThesis || null,
+        checkpoints: (plan.checkpoints || []).map(cp => ({
+          weekNumber: cp.weekNumber,
+          label: cp.label,
+          description: cp.description,
+          targetBiomarkers: cp.targetBiomarkers,
+        })),
+        watchOuts: plan.watchOuts || [],
+        dailySchedule: plan.dailySchedule || null,
+        protocol: plan.protocol || null,
+        nextSteps: plan.nextSteps || null,
+      };
+
+      result.goals = goals.map(g => ({
+        title: g.title,
+        priority: g.priority,
+        status: g.status,
+        category: g.category,
+        healthImpact: g.healthImpact,
+        description: g.description,
+        whatThisMeans: g.whatThisMeans,
+        recommendedActions: g.recommendedActions,
+        achievementCriteria: g.achievementCriteria,
+        biomarkerEvidence: (g.biomarkerEvidence || []).map(bm => ({
+          name: bm.name,
+          value: bm.value,
+          unit: bm.unit,
+          flag: bm.flag,
+          targetValue: bm.targetValue,
+        })),
+        protocolItems: (g.protocolItems || []).map(pi => ({
+          productName: pi.productName,
+          dosing: pi.dosing,
+        })),
+      }));
+    }
+  } catch (err) {
+    console.warn("[getMedicalData] Failed to fetch action plan:", err.message);
   }
 
   return result;

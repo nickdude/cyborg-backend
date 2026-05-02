@@ -199,7 +199,7 @@ async function generateProtocol({ patientContext, goals, protocolItems, scores, 
       const rawOutput = await generateText({
         systemPrompt: SYSTEM_PROMPT,
         userPrompt: promptToUse,
-        maxTokens: 8192,
+        maxTokens: 16384,
       });
 
       const parsed = aiExtractJSON(rawOutput);
