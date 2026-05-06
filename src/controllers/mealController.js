@@ -308,6 +308,14 @@ const commitMeal = async (req, res, next) => {
       tokensUsed: body.tokensUsed || { input: 0, output: 0 },
     });
 
+    // Fire-and-forget: compute food score + glucose prediction in background
+    const { computeAndSaveScore } = require("../services/foodScoringEngine");
+    computeAndSaveScore(meal).catch((err) =>
+      console.error(
+        `[FoodScore] Background score failed meal=${meal._id}: ${err.message}`
+      )
+    );
+
     return res.sendSuccess(attachImageUrls(meal.toObject()), "Meal saved", 201);
   } catch (error) {
     next(error);
