@@ -16,6 +16,8 @@ const doctorRoutes = require("./routes/doctorRoutes");
 const goalRoutes = require("./routes/goalRoutes");
 const agentRoutes = require("./routes/agentRoutes");
 const actionPlanRoutes = require("./routes/actionPlanRoutes");
+const activityRoutes = require("./routes/activityRoutes");
+const timelineRoutes = require("./routes/timelineRoutes");
 
 const app = express();
 
@@ -73,6 +75,8 @@ app.use("/api/auth", authRoutes);
 // User Routes (includes blood report endpoints)
 app.use("/api/users", userRoutes);
 app.use("/api/users", mealRoutes);
+app.use("/api/users", activityRoutes);
+app.use("/api/users", timelineRoutes);
 
 // Payment Routes
 app.use("/api/payments", paymentRoutes);
