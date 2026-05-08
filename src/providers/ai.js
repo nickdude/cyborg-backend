@@ -32,31 +32,50 @@ function getModelName() {
     : process.env.CLAUDE_MODEL || "claude-sonnet-4-6";
 }
 
-// --- Gemini key rotation (lazy init) ----------------------------------------
+// --- Gemini key management (primary + fallback) -----------------------------
 
-let geminiKeys = null;
-let geminiKeyIndex = 0;
+let _primaryGeminiKey = null;
+let _fallbackGeminiKeys = null;
+let _fallbackIndex = 0;
 
 function loadGeminiKeys() {
-  if (geminiKeys !== null) return;
-  geminiKeys = [];
+  if (_primaryGeminiKey !== null || _fallbackGeminiKeys !== null) return;
+  _fallbackGeminiKeys = [];
+  _primaryGeminiKey = process.env.GEMINI_API_KEY_primary || null;
   for (let i = 1; i <= 20; i++) {
     const key = process.env[`GEMINI_API_KEY_${i}`];
-    if (key) geminiKeys.push(key);
+    if (key) _fallbackGeminiKeys.push(key);
   }
-  console.log(`[AI] Loaded ${geminiKeys.length} Gemini API keys`);
+  const total = (_primaryGeminiKey ? 1 : 0) + _fallbackGeminiKeys.length;
+  console.log(`[AI] Loaded ${total} Gemini API keys (1 primary, ${_fallbackGeminiKeys.length} fallback)`);
 }
 
-function getNextGeminiKey() {
+function getPrimaryGeminiKey() {
   loadGeminiKeys();
-  if (geminiKeys.length === 0) throw new Error("No GEMINI_API_KEY_* found in .env");
-  const key = geminiKeys[geminiKeyIndex % geminiKeys.length];
-  geminiKeyIndex++;
+  if (!_primaryGeminiKey && _fallbackGeminiKeys.length === 0)
+    throw new Error("No GEMINI_API_KEY_* found in .env");
+  return _primaryGeminiKey;
+}
+
+function getNextFallbackKey() {
+  loadGeminiKeys();
+  if (_fallbackGeminiKeys.length === 0) return _primaryGeminiKey;
+  const key = _fallbackGeminiKeys[_fallbackIndex % _fallbackGeminiKeys.length];
+  _fallbackIndex++;
   return key;
 }
 
-function getGeminiClient() {
-  return new GoogleGenerativeAI(getNextGeminiKey());
+function getGeminiClient(fallback = false) {
+  const key = fallback ? getNextFallbackKey() : getPrimaryGeminiKey();
+  if (!key) throw new Error("No Gemini API key available");
+  return new GoogleGenerativeAI(key);
+}
+
+function isGeminiKeyError(err) {
+  const code = err?.status || err?.statusCode || err?.code;
+  if (code === 429 || code === 403) return true;
+  const msg = (err?.message || "").toLowerCase();
+  return msg.includes("quota") || msg.includes("rate limit") || msg.includes("resource exhausted");
 }
 
 // --- Retry helpers ----------------------------------------------------------
@@ -275,7 +294,21 @@ async function streamChatClaude({
 async function streamChatGemini({
   messages, systemPrompt, tools, executeTool, emit,
 }) {
-  const genAI = getGeminiClient();
+  try {
+    return await _streamChatGemini({ messages, systemPrompt, tools, executeTool, emit, useFallback: false });
+  } catch (err) {
+    if (isGeminiKeyError(err)) {
+      console.warn("[Gemini Chat] Primary key quota/rate error, retrying with fallback key");
+      return await _streamChatGemini({ messages, systemPrompt, tools, executeTool, emit, useFallback: true });
+    }
+    throw err;
+  }
+}
+
+async function _streamChatGemini({
+  messages, systemPrompt, tools, executeTool, emit, useFallback = false,
+}) {
+  const genAI = getGeminiClient(useFallback);
   const model = getModelName();
   let allToolUses = [];
   let iteration = 0;
@@ -449,12 +482,24 @@ async function parseVisionClaude({ buffer, mimeType, filename, systemPrompt, use
   };
 }
 
-async function parseVisionGemini({ buffer, mimeType, filename, systemPrompt, userPrompt, maxTokens }) {
-  const genAI = getGeminiClient();
+async function parseVisionGemini(opts) {
+  try {
+    return await _parseVisionGemini({ ...opts, useFallback: false });
+  } catch (err) {
+    if (isGeminiKeyError(err)) {
+      console.warn("[Gemini Vision] Primary key quota/rate error, retrying with fallback key");
+      return await _parseVisionGemini({ ...opts, useFallback: true });
+    }
+    throw err;
+  }
+}
+
+async function _parseVisionGemini({ buffer, mimeType, filename, systemPrompt, userPrompt, maxTokens, useFallback = false }) {
+  const genAI = getGeminiClient(useFallback);
   const model = getModelName();
   const outputCap = maxTokens || Number(process.env.GEMINI_VISION_MAX_TOKENS) || 32768;
 
-  console.log(`[Gemini Vision] -> model: ${model} | type: ${mimeType} | file: ${filename} | max_tokens: ${outputCap}`);
+  console.log(`[Gemini Vision] -> model: ${model} | type: ${mimeType} | file: ${filename} | max_tokens: ${outputCap} | fallback: ${useFallback}`);
 
   const genModel = genAI.getGenerativeModel({
     model,
@@ -511,15 +556,25 @@ async function generateText({ systemPrompt, userPrompt, maxTokens = 4096 }) {
   const model = getModelName();
 
   if (provider === "gemini") {
-    const genAI = getGeminiClient();
-    const genModel = genAI.getGenerativeModel({ model, systemInstruction: systemPrompt });
-
-    console.log(`[Gemini Text] -> model: ${model}`);
-    const result = await genModel.generateContent(userPrompt);
-    const text = result.response.text();
-    const usage = result.response.usageMetadata || {};
-    console.log(`[Gemini Text] <- in: ${usage.promptTokenCount || "?"} | out: ${usage.candidatesTokenCount || "?"}`);
-    return text;
+    const runGeminiText = async (useFallback) => {
+      const genAI = getGeminiClient(useFallback);
+      const genModel = genAI.getGenerativeModel({ model, systemInstruction: systemPrompt });
+      console.log(`[Gemini Text] -> model: ${model} | fallback: ${useFallback}`);
+      const result = await genModel.generateContent(userPrompt);
+      const text = result.response.text();
+      const usage = result.response.usageMetadata || {};
+      console.log(`[Gemini Text] <- in: ${usage.promptTokenCount || "?"} | out: ${usage.candidatesTokenCount || "?"}`);
+      return text;
+    };
+    try {
+      return await runGeminiText(false);
+    } catch (err) {
+      if (isGeminiKeyError(err)) {
+        console.warn("[Gemini Text] Primary key quota/rate error, retrying with fallback key");
+        return await runGeminiText(true);
+      }
+      throw err;
+    }
   }
 
   // Claude

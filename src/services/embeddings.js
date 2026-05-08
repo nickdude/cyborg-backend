@@ -3,32 +3,31 @@ const { GoogleGenerativeAI } = require("@google/generative-ai");
 const EMBEDDING_MODEL = "gemini-embedding-001";
 const EMBEDDING_DIMS = 3072;
 
-let _keyIndex = 0;
-let _keys = null;
+let _primaryKey = null;
+let _fallbackKeys = null;
+let _fallbackIndex = 0;
 
-function getNextKey() {
-  if (!_keys) {
-    _keys = [];
-    for (let i = 1; i <= 20; i++) {
-      const k = process.env[`GEMINI_API_KEY_${i}`];
-      if (k) _keys.push(k);
-    }
-    if (_keys.length === 0) throw new Error("No GEMINI_API_KEY_* found for embeddings");
+function loadKeys() {
+  if (_fallbackKeys !== null) return;
+  _primaryKey = process.env.GEMINI_API_KEY_primary || null;
+  _fallbackKeys = [];
+  for (let i = 1; i <= 20; i++) {
+    const k = process.env[`GEMINI_API_KEY_${i}`];
+    if (k) _fallbackKeys.push(k);
   }
-  const key = _keys[_keyIndex % _keys.length];
-  _keyIndex++;
-  return key;
+  if (!_primaryKey && _fallbackKeys.length === 0)
+    throw new Error("No GEMINI_API_KEY_* found for embeddings");
 }
 
-/**
- * Generate a 3072-dim embedding for a text string.
- * Uses gemini-embedding-001 via round-robin Gemini keys.
- *
- * @param {string} text
- * @returns {Promise<number[]>}
- */
-async function generateEmbedding(text) {
-  const genAI = new GoogleGenerativeAI(getNextKey());
+function isKeyError(err) {
+  const code = err?.status || err?.statusCode || err?.code;
+  if (code === 429 || code === 403) return true;
+  const msg = (err?.message || "").toLowerCase();
+  return msg.includes("quota") || msg.includes("rate limit") || msg.includes("resource exhausted");
+}
+
+async function _embed(text, apiKey) {
+  const genAI = new GoogleGenerativeAI(apiKey);
   const model = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
   const result = await model.embedContent(text);
   const values = result.embedding?.values;
@@ -36,6 +35,22 @@ async function generateEmbedding(text) {
     throw new Error(`Unexpected embedding dimensions: got ${values?.length}, expected ${EMBEDDING_DIMS}`);
   }
   return values;
+}
+
+async function generateEmbedding(text) {
+  loadKeys();
+  if (_primaryKey) {
+    try {
+      return await _embed(text, _primaryKey);
+    } catch (err) {
+      if (isKeyError(err) && _fallbackKeys.length > 0) {
+        console.warn("[Embeddings] Primary key quota/rate error, using fallback");
+      } else throw err;
+    }
+  }
+  const key = _fallbackKeys[_fallbackIndex % _fallbackKeys.length];
+  _fallbackIndex++;
+  return await _embed(text, key);
 }
 
 module.exports = { generateEmbedding };
