@@ -174,6 +174,28 @@ const verifyPayment = async (req, res, next) => {
 
     await subscription.save();
 
+    // Record subscription history + notify (powers unified purchase history).
+    try {
+      const SubscriptionHistory = require("../models/SubscriptionHistory");
+      const { notify, EVENTS } = require("../services/notificationService");
+      await SubscriptionHistory.create({
+        userId,
+        subscriptionId: subscription._id,
+        planType,
+        planName: plan.name,
+        amount: plan.amount,
+        action: "purchased",
+        startDate: subscription.purchaseDate,
+        endDate: expiryDate,
+      });
+      await notify(userId, EVENTS.SUBSCRIPTION_PURCHASED, {
+        subscriptionId: subscription._id,
+        planName: plan.name,
+      });
+    } catch (e) {
+      console.error("[subscription] history/notify failed:", e.message);
+    }
+
     res.sendSuccess(
       {
         subscription: {

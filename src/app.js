@@ -21,6 +21,12 @@ const timelineRoutes = require("./routes/timelineRoutes");
 const foodScoreRoutes = require("./routes/foodScoreRoutes");
 const foodSearchRoutes = require("./routes/foodSearchRoutes");
 const glucoseRoutes = require("./routes/glucoseRoutes");
+const productRoutes = require("./routes/productRoutes");
+const addressRoutes = require("./routes/addressRoutes");
+const cartRoutes = require("./routes/cartRoutes");
+const checkoutRoutes = require("./routes/checkoutRoutes");
+const orderRoutes = require("./routes/orderRoutes");
+const purchaseHistoryRoutes = require("./routes/purchaseHistoryRoutes");
 
 const app = express();
 
@@ -86,6 +92,14 @@ app.use("/api/users", timelineRoutes);
 
 // Payment Routes
 app.use("/api/payments", paymentRoutes);
+
+app.use("/api/products", productRoutes);
+
+app.use("/api/addresses", addressRoutes);
+app.use("/api/cart", cartRoutes);
+app.use("/api/checkout", checkoutRoutes);
+app.use("/api/orders", orderRoutes);
+app.use("/api/purchase-history", purchaseHistoryRoutes);
 
 // Notification Routes
 app.use("/api/notifications", notificationRoutes);
