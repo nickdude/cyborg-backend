@@ -202,9 +202,14 @@ const getUserSubscription = async (req, res, next) => {
   try {
     const { userId } = req.params;
 
+    // Only a genuinely active, non-expired subscription counts. This makes the
+    // endpoint the single source of truth for "does the user have an active
+    // plan" — expired and cancelled subscriptions return null. If a user has
+    // multiple, the most recent active one wins.
     const subscription = await Subscription.findOne({
       userId,
-      status: { $in: ["active", "pending"] },
+      status: "active",
+      expiryDate: { $gt: new Date() },
     }).sort({ createdAt: -1 });
 
     if (!subscription) {

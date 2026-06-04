@@ -635,16 +635,31 @@ const socialLogin = async (req, res, next) => {
     // Generate token
     const token = user.generateToken();
 
+    // Active-plan check (status active + not expired) so navigation can skip the
+    // Membership page for social-login users exactly like the email flows do.
+    const Subscription = require("../models/Subscription");
+    const activeSubscription = await Subscription.findOne({
+      userId: user._id,
+      status: "active",
+      expiryDate: { $gt: new Date() },
+    });
+
     res.sendSuccess(
       {
         token,
         user: {
           id: user._id,
           email: user.email,
+          phone: user.phone,
           firstName: user.firstName,
           lastName: user.lastName,
           userType: user.userType,
+          dateOfBirth: user.dateOfBirth,
+          zipCode: user.zipCode,
           onboardingCompleted: user.onboardingCompleted,
+          whereYouHeardAboutUs: user.whereYouHeardAboutUs,
+          hasSeenWelcome: user.hasSeenWelcome,
+          hasActiveSubscription: !!activeSubscription,
         },
       },
       "Social login successful",
