@@ -10,6 +10,41 @@ const razorpay = new Razorpay({
   key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
+// ============== PLAN CATALOG (single source of truth) ==============
+//
+// `price` is in rupees (for display), `amount` is what Razorpay charges in
+// paise (amount = price * 100). `durationMonths` is the length of the term the
+// purchase grants — used to compute the subscription expiry date.
+const PLANS = {
+  advanced: {
+    id: "advanced",
+    name: "Advanced",
+    price: 15000,
+    amount: 1500000, // ₹15,000 in paise
+    currency: "INR",
+    billingPeriod: "month",
+    durationMonths: 1,
+    description:
+      "Comprehensive metabolic care — Amino+9, full labs, and a quarterly GLP-1 pen.",
+    features: ["Amino+9", "Labs", "1 GLP-1 Pen (Indian) per quarter"],
+    highlighted: true,
+  },
+  "auto-pilot": {
+    id: "auto-pilot",
+    name: "Auto-Pilot",
+    price: 10000,
+    amount: 1000000, // ₹10,000 in paise (grants 6-month access)
+    currency: "INR",
+    billingPeriod: "6 months",
+    durationMonths: 6,
+    description: "Set-and-forget subscription — 6 months of guided metabolic care.",
+    features: ["6-month subscription", "Subscription-based plan"],
+    highlighted: false,
+  },
+};
+
+const getPlan = (planType) => PLANS[planType] || null;
+
 // ============== GET ALL PLANS ==============
 
 /**
@@ -17,55 +52,7 @@ const razorpay = new Razorpay({
  */
 const getAllPlans = async (req, res, next) => {
   try {
-    const plans = [
-      {
-        id: "basic",
-        name: "Cyborg Membership",
-        amount: 19900,
-        price: 199,
-        currency: "INR",
-        description: "100+ health tests, tracked over time and a private medical team.",
-        features: [
-          "100+ health tests",
-          "Tracked over time",
-          "Private medical team",
-          "Email support",
-        ],
-        highlighted: false,
-      },
-      {
-        id: "premium",
-        name: "Premium Membership",
-        amount: 29900,
-        price: 299,
-        currency: "INR",
-        description: "Everything in Cyborg Membership + Priority support.",
-        features: [
-          "Everything in Cyborg",
-          "Priority support",
-          "Dedicated doctor",
-          "24/7 chat access",
-        ],
-        highlighted: true,
-      },
-      {
-        id: "membership",
-        name: "Cyborg Membership",
-        amount: 19900,
-        price: 199,
-        currency: "INR",
-        description: "1 flat rate purchase to book your photographer.",
-        features: [
-          "100+ lab tests",
-          "Results tracked over time",
-          "Private medical team",
-          "Email support",
-        ],
-        highlighted: false,
-      },
-    ];
-
-    res.sendSuccess(plans, "Plans retrieved successfully");
+    res.sendSuccess(Object.values(PLANS), "Plans retrieved successfully");
   } catch (error) {
     next(error);
   }
@@ -99,30 +86,11 @@ const createOrder = async (req, res, next) => {
       dateOfBirth: new Date(dob),
     });
 
-    // Validate plan type
-    const plans = {
-      basic: {
-        name: "Cyborg Membership",
-        amount: 19900, // $199 in paise
-        description: "100+ health tests, tracked over time and a private medical team.",
-      },
-      premium: {
-        name: "Premium Membership",
-        amount: 29900, // $299 in paise
-        description: "Everything in Cyborg Membership + Priority support.",
-      },
-      membership: {
-        name: "Cyborg Membership",
-        amount: 19900, // ₹199 in paise
-        description: "1 flat rate purchase to book your photographer.",
-      },
-    };
-
-    if (!plans[planType]) {
+    // Validate plan type against the canonical catalog
+    const plan = getPlan(planType);
+    if (!plan) {
       return res.sendError("Invalid plan type", 400);
     }
-
-    const plan = plans[planType];
 
     // Create Razorpay order
     const orderOptions = {
@@ -179,25 +147,15 @@ const verifyPayment = async (req, res, next) => {
       return res.sendError("Payment not captured", 400);
     }
 
-    // Get plan details
-    const plans = {
-      basic: {
-        name: "Cyborg Membership",
-        amount: 19900,
-      },
-      premium: {
-        name: "Premium Membership",
-        amount: 29900,
-      },
-      membership: {
-        name: "Cyborg Membership",
-        amount: 19900,
-      },
-    };
+    // Get plan details from the canonical catalog
+    const plan = getPlan(planType);
+    if (!plan) {
+      return res.sendError("Invalid plan type", 400);
+    }
 
-    const plan = plans[planType];
+    // Expiry is driven by the plan term (Advanced = 1 month, Auto-Pilot = 6 months)
     const expiryDate = new Date();
-    expiryDate.setFullYear(expiryDate.getFullYear() + 1); // 1 year subscription
+    expiryDate.setMonth(expiryDate.getMonth() + plan.durationMonths);
 
     // Create subscription record
     const subscription = new Subscription({
@@ -205,6 +163,7 @@ const verifyPayment = async (req, res, next) => {
       planType,
       planName: plan.name,
       amount: plan.amount,
+      durationMonths: plan.durationMonths,
       status: "active",
       razorpayOrderId: orderId,
       razorpayPaymentId: paymentId,
@@ -214,13 +173,6 @@ const verifyPayment = async (req, res, next) => {
     });
 
     await subscription.save();
-
-    // Update user subscription status (optional)
-    const user = await User.findByIdAndUpdate(
-      userId,
-      { subscriptionStatus: "active" },
-      { new: true }
-    );
 
     res.sendSuccess(
       {

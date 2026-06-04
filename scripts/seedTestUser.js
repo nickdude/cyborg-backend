@@ -389,16 +389,17 @@ async function seed() {
   console.log("[Seed] Creating subscription...");
   await Subscription.create({
     userId: user._id,
-    planType: "premium",
-    planName: "Premium Health Plan",
-    amount: 29900,
+    planType: "advanced",
+    planName: "Advanced",
+    amount: 1500000,
+    durationMonths: 1,
     currency: "INR",
     status: "active",
     razorpayOrderId: "order_test_abc123",
     razorpayPaymentId: "pay_test_xyz789",
     razorpaySignature: "sig_test_placeholder",
     purchaseDate: new Date("2026-03-01"),
-    expiryDate: new Date("2027-03-01"),
+    expiryDate: new Date("2026-04-01"),
     autoRenew: true,
     transactionNotes: "Test subscription for cyborg_merger database",
   });
@@ -410,7 +411,7 @@ async function seed() {
   await Notification.insertMany([
     { userId: user._id, type: "report_ready", metadata: { reportId: report2._id, message: "Your blood report analysis is ready!" }, read: false },
     { userId: user._id, type: "goal_update", metadata: { message: "New health goals generated based on your latest report." }, read: false },
-    { userId: user._id, type: "subscription_active", metadata: { planName: "Premium Health Plan", expiryDate: "2027-03-01" }, read: true },
+    { userId: user._id, type: "subscription_active", metadata: { planName: "Advanced", expiryDate: "2026-04-01" }, read: true },
     { userId: user._id, type: "welcome", metadata: { message: "Welcome to Cyborg Healthcare! Start by uploading your blood report." }, read: true },
   ]);
 
@@ -531,7 +532,7 @@ async function seed() {
   console.log(`OnboardingAnswers: 1`);
   console.log(`ReferralSources: 1`);
   console.log(`ReportData:      2 (Jan + Apr 2026)`);
-  console.log(`Subscriptions:   1 (premium, active)`);
+  console.log(`Subscriptions:   1 (advanced, active)`);
   console.log(`Notifications:   4`);
   console.log(`Chats:           1 (4 messages, patient chat)`);
   console.log(`WearableData:    30 days (Apple Watch)`);

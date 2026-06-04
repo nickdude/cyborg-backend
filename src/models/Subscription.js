@@ -9,11 +9,12 @@ const subscriptionSchema = new mongoose.Schema(
     },
     planType: {
       type: String,
-      enum: ["basic", "premium", "membership"],
+      enum: ["advanced", "auto-pilot"],
       required: true,
     },
     planName: String,
     amount: Number, // in paise
+    durationMonths: Number, // length of the subscription term in months
     currency: {
       type: String,
       default: "INR",
