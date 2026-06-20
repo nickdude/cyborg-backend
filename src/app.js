@@ -49,6 +49,9 @@ const corsOptions = {
     if (!origin) return cb(null, true);
     if (!isProd && allowedOrigins.length === 0) return cb(null, true);
     if (allowedOrigins.includes(origin)) return cb(null, true);
+    console.warn(
+      `[CORS] blocked origin: ${origin} (allowed: ${allowedOrigins.join(", ") || "<none>"})`
+    );
     return cb(new Error(`CORS: origin ${origin} not allowed`));
   },
   credentials: true,
@@ -60,6 +63,45 @@ const corsOptions = {
 
 // Trust proxy (DO App Platform uses reverse proxy)
 app.set("trust proxy", 1);
+
+// ---------------------------------------------------------------------------
+// Client log sink — receives logs shipped from the browser (especially mobile,
+// where the console can't be inspected) so they surface in THIS server's logs.
+// Mounted BEFORE the strict CORS allowlist and accepts text/plain so it works
+// as a preflight-free "simple request" / navigator.sendBeacon even if a normal
+// API call would be CORS-blocked. Must never throw.
+// ---------------------------------------------------------------------------
+app.options("/api/client-logs", cors());
+app.post(
+  "/api/client-logs",
+  cors(),
+  express.text({ type: "*/*", limit: "256kb" }),
+  (req, res) => {
+    try {
+      let payload = req.body;
+      if (typeof payload === "string" && payload) {
+        try {
+          payload = JSON.parse(payload);
+        } catch (_) {
+          /* keep the raw string if it isn't JSON */
+        }
+      }
+      console.log(
+        "[CLIENT-LOG]",
+        JSON.stringify({
+          ip: req.ip,
+          ua: req.headers["user-agent"],
+          origin: req.headers["origin"],
+          at: new Date().toISOString(),
+          payload,
+        })
+      );
+    } catch (err) {
+      console.warn("[CLIENT-LOG] failed to record client log:", err.message);
+    }
+    res.status(204).end();
+  }
+);
 
 // Middleware
 app.use(helmet());

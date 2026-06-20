@@ -14,6 +14,62 @@ const uploadLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Diagnostics for the blood-report upload path. `content-length` is the key
+// signal: large mobile camera photos can be dropped at the network edge
+// (e.g. AWS API Gateway's 10MB limit or nginx client_max_body_size) BEFORE the
+// request reaches Express, which the browser then reports as a generic
+// "Network Error". If a failed upload shows NO [UPLOAD-REQ] line, the edge
+// rejected it before Node ever saw it.
+const logUploadRequest = (req, res, next) => {
+  console.log(
+    "[UPLOAD-REQ]",
+    JSON.stringify({
+      method: req.method,
+      url: req.originalUrl,
+      contentLength: req.headers["content-length"],
+      contentType: req.headers["content-type"],
+      origin: req.headers["origin"],
+      host: req.headers["host"],
+      xff: req.headers["x-forwarded-for"],
+      ua: req.headers["user-agent"],
+      at: new Date().toISOString(),
+    })
+  );
+  next();
+};
+
+// Wrap multer so its errors (LIMIT_FILE_SIZE, rejected type, etc.) are logged
+// explicitly instead of surfacing as an opaque failure.
+const uploadSingle = (req, res, next) => {
+  upload.single("file")(req, res, (err) => {
+    if (err) {
+      console.error(
+        "[MULTER-ERR]",
+        JSON.stringify({
+          name: err.name,
+          code: err.code, // e.g. LIMIT_FILE_SIZE
+          message: err.message,
+          field: err.field,
+          contentLength: req.headers["content-length"],
+          ua: req.headers["user-agent"],
+        })
+      );
+      return next(err);
+    }
+    if (req.file) {
+      console.log(
+        "[MULTER] file accepted",
+        JSON.stringify({
+          originalname: req.file.originalname,
+          mimetype: req.file.mimetype,
+          sizeKB: Math.round(req.file.size / 1024),
+        })
+      );
+    }
+    next();
+  });
+};
+
 // Get all users (for doctor dashboard)
 router.get("/", verifyToken, checkRole(["doctor"]), userController.getAllUsers);
 
@@ -90,11 +146,12 @@ router.get(
 // Param-based routes after the specific ones
 router.post(
   "/:userId/blood-reports",
+  logUploadRequest,
   verifyToken,
   checkRole(["user"]),
   checkOwnership,
   uploadLimiter,
-  upload.single("file"),
+  uploadSingle,
   reportController.uploadReport
 );
 

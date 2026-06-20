@@ -279,6 +279,16 @@ async function processReportInBackground(userId, reportId, buffer, mimeType, fil
  */
 const uploadReport = async (req, res, next) => {
   try {
+    console.log(
+      "[UPLOAD] handler entry",
+      JSON.stringify({
+        userId: req.user?.id,
+        hasFile: Boolean(req.file),
+        originalname: req.file?.originalname,
+        mimetype: req.file?.mimetype,
+        sizeKB: req.file ? Math.round(req.file.size / 1024) : 0,
+      })
+    );
     if (!req.file) {
       return res.sendError("No file provided", 400);
     }
@@ -369,6 +379,15 @@ const uploadReport = async (req, res, next) => {
     // Fire-and-forget: process the report in the background
     processReportInBackground(req.user.id, reportData._id, buffer, mimeType, filename);
   } catch (error) {
+    console.error(
+      "[UPLOAD-ERR]",
+      JSON.stringify({
+        userId: req.user?.id,
+        message: error?.message,
+        statusCode: error?.statusCode,
+      }),
+      error?.stack
+    );
     next(error);
   }
 };

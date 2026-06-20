@@ -17,8 +17,23 @@ const ALLOWED_EXTENSIONS = [".pdf", ".jpg", ".jpeg", ".png", ".webp"];
 const fileFilter = (req, file, cb) => {
   const ext = path.extname(file.originalname).toLowerCase();
   if (ALLOWED_MIMES.includes(file.mimetype) && ALLOWED_EXTENSIONS.includes(ext)) {
+    console.log(
+      "[MULTER] accept",
+      JSON.stringify({ originalname: file.originalname, mimetype: file.mimetype, ext })
+    );
     return cb(null, true);
   }
+  // Common mobile cause: iPhone HEIC/HEIF photos arrive as image/heic or
+  // application/octet-stream and get rejected here.
+  console.warn(
+    "[MULTER] reject",
+    JSON.stringify({
+      originalname: file.originalname,
+      mimetype: file.mimetype,
+      ext,
+      reason: "mimetype/extension not in allowlist",
+    })
+  );
   const err = new Error("Only PDF and image files (JPG, PNG, WEBP) are allowed");
   err.statusCode = 400;
   cb(err, false);

@@ -11,11 +11,11 @@ const errorHandler = (err, req, res, next) => {
   if (err.name === "MulterError") {
     statusCode = 400;
     if (err.code === "FILE_TOO_LARGE") {
-      message = "File too large. Maximum file size is 10MB";
+      message = "File too large. Maximum file size is 20MB";
     } else if (err.code === "LIMIT_FILE_COUNT") {
       message = "Too many files. Only one file is allowed";
     } else if (err.code === "LIMIT_FILE_SIZE") {
-      message = "File size exceeds the maximum limit of 10MB";
+      message = "File size exceeds the maximum limit of 20MB";
     } else {
       message = err.message;
     }
@@ -58,6 +58,9 @@ const errorHandler = (err, req, res, next) => {
     url: req.url,
     method: req.method,
     name: err.name,
+    code: err.code || null,
+    origin: req.headers?.origin,
+    userAgent: req.headers?.["user-agent"],
   });
 
   res.status(statusCode).json(errorResponse(message, statusCode, errors));
