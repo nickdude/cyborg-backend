@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+
+# Environment
+.env
+.env.*
+!.env.example
+devansh.env
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+pnpm-debug.log*
+*.log
+logs/
+
+# Build outputs
+coverage/
+dist/
+.tmp/
+.cache/
+
+# Testing
+*.test.js
+*.spec.js
+__tests__/
+test-results/
+playwright-report/
+playwright.config.*
+blob-report/
+*.har
+
+# Tool / MCP artifacts
+.devansh-review/
+.claude/
+.mcp/
+
+# OS / Editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Uploads and local data
+uploads/

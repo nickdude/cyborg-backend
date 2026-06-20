@@ -1,0 +1,290 @@
+require("dotenv").config();
+const Razorpay = require("razorpay");
+const crypto = require("crypto");
+const User = require("../models/User");
+const Subscription = require("../models/Subscription");
+
+// Initialize Razorpay
+const razorpay = new Razorpay({
+  key_id: process.env.RAZORPAY_KEY_ID,
+  key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
+
+// ============== PLAN CATALOG (single source of truth) ==============
+//
+// `price` is in rupees (for display), `amount` is what Razorpay charges in
+// paise (amount = price * 100). `durationMonths` is the length of the term the
+// purchase grants — used to compute the subscription expiry date.
+const PLANS = {
+  advanced: {
+    id: "advanced",
+    name: "Advanced",
+    price: 15000,
+    amount: 1500000, // ₹15,000 in paise
+    currency: "INR",
+    billingPeriod: "month",
+    durationMonths: 1,
+    description:
+      "Comprehensive metabolic care — Amino+9, full labs, and a quarterly GLP-1 pen.",
+    features: ["Amino+9", "Labs", "1 GLP-1 Pen (Indian) per quarter"],
+    highlighted: true,
+  },
+  "auto-pilot": {
+    id: "auto-pilot",
+    name: "Auto-Pilot",
+    price: 10000,
+    amount: 1000000, // ₹10,000 in paise (grants 6-month access)
+    currency: "INR",
+    billingPeriod: "6 months",
+    durationMonths: 6,
+    description: "Set-and-forget subscription — 6 months of guided metabolic care.",
+    features: ["6-month subscription", "Subscription-based plan"],
+    highlighted: false,
+  },
+};
+
+const getPlan = (planType) => PLANS[planType] || null;
+
+// ============== GET ALL PLANS ==============
+
+/**
+ * Get all available membership plans
+ */
+const getAllPlans = async (req, res, next) => {
+  try {
+    res.sendSuccess(Object.values(PLANS), "Plans retrieved successfully");
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============== CREATE ORDER ==============
+
+/**
+ * Create a Razorpay order for membership purchase
+ */
+const createOrder = async (req, res, next) => {
+  try {
+    const { userId, planType, firstName, lastName, email, zip, dob, phone } = req.body;
+
+    // Validate required fields
+    if (!userId || !planType) {
+      return res.sendError("User ID and plan type are required", 400);
+    }
+
+    if (!firstName || !lastName || !email || !zip || !dob || !phone) {
+      return res.sendError("All user details are required (firstName, lastName, email, zip, dob, phone)", 400);
+    }
+
+    // Update user details before creating order
+    await User.findByIdAndUpdate(userId, {
+      firstName,
+      lastName,
+      email,
+      phone,
+      zipCode: zip,
+      dateOfBirth: new Date(dob),
+    });
+
+    // Validate plan type against the canonical catalog
+    const plan = getPlan(planType);
+    if (!plan) {
+      return res.sendError("Invalid plan type", 400);
+    }
+
+    // Create Razorpay order
+    const orderOptions = {
+      amount: plan.amount, // Amount in paise
+      currency: "INR",
+      receipt: `${userId}-${Date.now()}`,
+      notes: {
+        userId,
+        planType,
+      },
+    };
+
+    const order = await razorpay.orders.create(orderOptions);
+
+    res.sendSuccess(
+      {
+        orderId: order.id,
+        amount: order.amount,
+        currency: order.currency,
+        key_id: process.env.RAZORPAY_KEY_ID,
+        planName: plan.name,
+        planType,
+      },
+      "Order created successfully",
+      201
+    );
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============== VERIFY PAYMENT ==============
+
+/**
+ * Verify payment signature and create subscription
+ */
+const verifyPayment = async (req, res, next) => {
+  try {
+    const { userId, orderId, paymentId, signature, planType } = req.body;
+
+    // Verify signature
+    const shasum = crypto.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET);
+    shasum.update(`${orderId}|${paymentId}`);
+    const digest = shasum.digest("hex");
+
+    if (digest !== signature) {
+      return res.sendError("Payment verification failed", 400);
+    }
+
+    // Get payment details from Razorpay
+    const payment = await razorpay.payments.fetch(paymentId);
+
+    if (!payment || payment.status !== "captured") {
+      return res.sendError("Payment not captured", 400);
+    }
+
+    // Get plan details from the canonical catalog
+    const plan = getPlan(planType);
+    if (!plan) {
+      return res.sendError("Invalid plan type", 400);
+    }
+
+    // Expiry is driven by the plan term (Advanced = 1 month, Auto-Pilot = 6 months)
+    const expiryDate = new Date();
+    expiryDate.setMonth(expiryDate.getMonth() + plan.durationMonths);
+
+    // Create subscription record
+    const subscription = new Subscription({
+      userId,
+      planType,
+      planName: plan.name,
+      amount: plan.amount,
+      durationMonths: plan.durationMonths,
+      status: "active",
+      razorpayOrderId: orderId,
+      razorpayPaymentId: paymentId,
+      razorpaySignature: signature,
+      expiryDate,
+      autoRenew: true,
+    });
+
+    await subscription.save();
+
+    // Record subscription history + notify (powers unified purchase history).
+    try {
+      const SubscriptionHistory = require("../models/SubscriptionHistory");
+      const { notify, EVENTS } = require("../services/notificationService");
+      await SubscriptionHistory.create({
+        userId,
+        subscriptionId: subscription._id,
+        planType,
+        planName: plan.name,
+        amount: plan.amount,
+        action: "purchased",
+        startDate: subscription.purchaseDate,
+        endDate: expiryDate,
+      });
+      await notify(userId, EVENTS.SUBSCRIPTION_PURCHASED, {
+        subscriptionId: subscription._id,
+        planName: plan.name,
+      });
+    } catch (e) {
+      console.error("[subscription] history/notify failed:", e.message);
+    }
+
+    res.sendSuccess(
+      {
+        subscription: {
+          id: subscription._id,
+          planType,
+          planName: plan.name,
+          status: "active",
+          expiryDate,
+        },
+        paymentId,
+      },
+      "Payment verified and subscription created",
+      201
+    );
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============== GET USER SUBSCRIPTION ==============
+
+/**
+ * Get current subscription of user
+ */
+const getUserSubscription = async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+
+    // Only a genuinely active, non-expired subscription counts. This makes the
+    // endpoint the single source of truth for "does the user have an active
+    // plan" — expired and cancelled subscriptions return null. If a user has
+    // multiple, the most recent active one wins.
+    const subscription = await Subscription.findOne({
+      userId,
+      status: "active",
+      expiryDate: { $gt: new Date() },
+    }).sort({ createdAt: -1 });
+
+    if (!subscription) {
+      return res.sendSuccess(null, "No active subscription found");
+    }
+
+    res.sendSuccess(subscription, "Subscription found");
+  } catch (error) {
+    next(error);
+  }
+};
+
+// ============== WEBHOOK FOR RAZORPAY ==============
+
+/**
+ * Handle Razorpay webhook events
+ */
+const handleWebhook = async (req, res, next) => {
+  try {
+    const signature = req.get("X-Razorpay-Signature");
+    const body = JSON.stringify(req.body);
+
+    // Verify webhook signature
+    const shasum = crypto.createHmac("sha256", process.env.RAZORPAY_WEBHOOK_SECRET);
+    shasum.update(body);
+    const digest = shasum.digest("hex");
+
+    if (digest !== signature) {
+      return res.status(400).send("Invalid signature");
+    }
+
+    const event = req.body.event;
+    const eventData = req.body.payload.payment.entity;
+
+    if (event === "payment.authorized" || event === "payment.captured") {
+      // Handle payment success
+      console.log(`Payment ${eventData.id} captured`);
+    } else if (event === "payment.failed") {
+      // Handle payment failure
+      console.log(`Payment ${eventData.id} failed`);
+      // You can update subscription status to 'failed' if needed
+    }
+
+    res.sendSuccess(null, "Webhook received");
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = {
+  getAllPlans,
+  createOrder,
+  verifyPayment,
+  getUserSubscription,
+  handleWebhook,
+};
