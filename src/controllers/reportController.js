@@ -610,7 +610,7 @@ const getBiomarkerPanel = async (req, res, next) => {
     const report = await ReportData.findOne({ userId: req.user.id })
       .sort({ reportDate: -1, createdAt: -1 })
       .select(
-        "biomarkerPanel scores reportDate reportLabel filename createdAt"
+        "biomarkerPanel scores reportDate reportLabel filename createdAt updatedAt"
       )
       .lean();
 
@@ -630,6 +630,9 @@ const getBiomarkerPanel = async (req, res, next) => {
       {
         reportId: report._id,
         reportDate: report.reportDate || report.createdAt,
+        // When the data was last processed/updated in our system (not the lab's
+        // collection date) — this is what "Last updated" should show.
+        lastUpdatedAt: report.updatedAt || report.createdAt || report.reportDate,
         reportLabel: report.reportLabel || "",
         filename: report.filename,
         scores: report.scores,
