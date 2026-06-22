@@ -112,6 +112,39 @@ const backfillLatestReportReady = async () => {
   }
 };
 
+/**
+ * Re-trigger action plans orphaned by a server restart. Generation runs as an
+ * in-process background job, so a restart mid-generation leaves a plan stuck in
+ * "pending"/"generating" with NO recovery path (createPlan says "already exists",
+ * retry only accepts "failed"). On boot, any such plan is necessarily orphaned —
+ * re-kick its generation so the user isn't stuck on "Generating your health goals".
+ */
+const recoverOrphanedActionPlans = async () => {
+  const ActionPlan = require("./models/ActionPlan");
+  const stuck = await ActionPlan.find({
+    status: { $in: ["pending", "generating"] },
+  }).select("_id userId reportId generationAttempts");
+  if (stuck.length === 0) return;
+
+  const { triggerGoalsAndActionPlan } = require("./services/actionPlanGenerator");
+  let kicked = 0;
+  for (const p of stuck) {
+    if ((p.generationAttempts || 0) >= 3) {
+      await ActionPlan.updateOne(
+        { _id: p._id },
+        { $set: { status: "failed", errorMessage: "Generation interrupted (max attempts reached)" } }
+      );
+      continue;
+    }
+    console.log(`[Recovery] Re-triggering orphaned action plan ${p._id}`);
+    triggerGoalsAndActionPlan(p.userId, p.reportId, p._id).catch((err) =>
+      console.error(`[Recovery] Action plan ${p._id} failed: ${err.message}`)
+    );
+    kicked++;
+  }
+  console.log(`[Recovery] Re-triggered ${kicked} orphaned action plan(s)`);
+};
+
 // Validate required environment variables
 const REQUIRED_ENV = ["MONGO_URI", "JWT_SECRET"];
 const missing = REQUIRED_ENV.filter((key) => !process.env[key]);
@@ -146,6 +179,9 @@ connectDB().then(() => {
   );
   buildDatabaseSchema().catch((err) =>
     console.error("[SchemaBuilder] Init failed:", err.message)
+  );
+  recoverOrphanedActionPlans().catch((err) =>
+    console.error("[Recovery] Failed:", err.message)
   );
 
   const server = app.listen(PORT, () => {
