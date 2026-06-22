@@ -6,7 +6,7 @@ const ReportData = require("../models/ReportData");
 const User = require("../models/User");
 const Notification = require("../models/Notification");
 const { pdfParserSystemPrompt } = require("../prompts/pdfParser");
-const { parseVision, extractJSON, getModelName } = require("../providers/ai");
+const { parseVision, extractJSON, getModelName, generateText } = require("../providers/ai");
 const { normalizeTests } = require("../utils/labNormalizer");
 const {
   computeDerivedBiomarkers,
@@ -757,6 +757,51 @@ const getBiomarkerTrends = async (req, res, next) => {
   }
 };
 
+/**
+ * Fast one-shot AI summary for a single biomarker category (no tools, no thinking).
+ * Powers the typing summary on the /data category card. Kept lightweight so it
+ * returns in a couple of seconds, unlike the full agentic chat.
+ */
+const getCategorySummary = async (req, res, next) => {
+  try {
+    const { category, biomarkers } = req.body || {};
+    const items = Array.isArray(biomarkers) ? biomarkers : [];
+    if (!category || items.length === 0) {
+      return res.sendSuccess({ summary: "" }, "No data to summarize");
+    }
+
+    const lines = items
+      .slice(0, 30)
+      .map((b) => {
+        const status =
+          b.status === "optimal"
+            ? "optimal"
+            : b.status === "normal"
+            ? "borderline/normal"
+            : "out of range";
+        const r = b.optimalRange || {};
+        const range =
+          r.min != null || r.max != null ? ` (optimal ${r.min ?? ""}-${r.max ?? ""})` : "";
+        return `- ${b.name}: ${b.value ?? "N/A"} ${b.unit || ""} — ${status}${range}`;
+      })
+      .join("\n");
+
+    const systemPrompt =
+      "You are a concise health-data summarizer for a longevity platform. " +
+      "Given a health category and the user's biomarkers, write a SHORT 2-4 sentence summary in plain English, " +
+      "naming the specific markers that are high, low, or reassuring, then ONE practical lifestyle tip " +
+      "(nutrition, movement, sleep, or stress). " +
+      "Plain conversational text only — no markdown, no headings, no bullet points, no emojis, no preamble. " +
+      "Do not diagnose a condition and do not prescribe or change medication.";
+    const userPrompt = `Category: ${category}\n\nBiomarkers:\n${lines}\n\nWrite the 2-4 sentence summary now.`;
+
+    const summary = await generateText({ systemPrompt, userPrompt, maxTokens: 320 });
+    return res.sendSuccess({ summary: (summary || "").trim() }, "Summary generated");
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   uploadReport,
   listReports,
@@ -768,4 +813,5 @@ module.exports = {
   getBiomarkerPanel,
   getBiomarkerTimeline,
   getBiomarkerTrends,
+  getCategorySummary,
 };

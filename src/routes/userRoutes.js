@@ -75,6 +75,12 @@ router.get(
   reportController.getBiomarkerPanel
 );
 
+router.post(
+  "/blood-reports/category-summary",
+  verifyToken,
+  reportController.getCategorySummary
+);
+
 router.get(
   "/blood-reports/timeline/:canonicalName",
   verifyToken,
