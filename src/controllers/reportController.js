@@ -5,6 +5,8 @@ const mongoose = require("mongoose");
 const ReportData = require("../models/ReportData");
 const User = require("../models/User");
 const Notification = require("../models/Notification");
+const ActionPlan = require("../models/ActionPlan");
+const Goal = require("../models/Goal");
 const { pdfParserSystemPrompt } = require("../prompts/pdfParser");
 const { parseVision, extractJSON, getModelName, generateText } = require("../providers/ai");
 const { normalizeTests } = require("../utils/labNormalizer");
@@ -551,6 +553,14 @@ const deleteReport = async (req, res, next) => {
     await User.findByIdAndUpdate(req.user.id, {
       $pull: { bloodReports: report._id },
     });
+
+    // Cascade-remove the AI-derived action plan(s) + goals for this report so the
+    // protocol / goals views fall back to the empty "upload a report" state instead
+    // of showing orphaned data after the source report is gone.
+    await Promise.all([
+      ActionPlan.deleteMany({ userId: req.user.id, reportId: report._id }),
+      Goal.deleteMany({ userId: req.user.id, reportId: report._id }),
+    ]);
 
     // Update bloodReport to latest remaining report
     const latest = await ReportData.findOne({ userId: req.user.id })

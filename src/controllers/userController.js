@@ -39,6 +39,16 @@ const saveOnboardingAnswers = async (req, res, next) => {
     if (whereYouHeardAboutUs !== undefined) {
       user.whereYouHeardAboutUs = whereYouHeardAboutUs;
     }
+    // Map the date-of-birth answer onto the user so downstream scoring (biological
+    // age, cyborg score) can use it. The onboarding asks this as question "1.3a".
+    const dobAnswer = answers && (answers["1.3a"] || answers.dateOfBirth);
+    if (dobAnswer) {
+      const dob = new Date(dobAnswer);
+      if (!Number.isNaN(dob.getTime()) && dob <= new Date()) {
+        user.dateOfBirth = dob;
+      }
+    }
+
     user.onboardingAnswers = onboardingAnswer._id;
     user.onboardingCompleted = true;
     await user.save();

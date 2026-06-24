@@ -110,7 +110,7 @@ const getLatestPlan = async (req, res, next) => {
   try {
     const userId = req.user.id;
 
-    const plan = await ActionPlan.findOne({ userId, status: { $in: ["ready", "approved"] } })
+    let plan = await ActionPlan.findOne({ userId, status: { $in: ["ready", "approved"] } })
       .sort({ createdAt: -1 })
       .populate({
         path: "goalIds",
@@ -118,14 +118,25 @@ const getLatestPlan = async (req, res, next) => {
         select: GOAL_FIELDS,
       });
 
+    // Ignore orphaned plans whose source blood report was deleted — the protocol /
+    // goals views must reflect "no report uploaded", not stale data.
+    if (plan && plan.reportId && !(await ReportData.exists({ _id: plan.reportId, userId }))) {
+      plan = null;
+    }
+
     if (!plan) {
       // Check if there's a plan in review or still generating
-      const fallbackPlan = await ActionPlan.findOne({
+      let fallbackPlan = await ActionPlan.findOne({
         userId,
         status: { $in: ["pending_review", "draft", "pending", "generating"] },
       })
         .sort({ createdAt: -1 })
         .select("_id status healthReport overview reportId createdAt");
+
+      // Same orphan guard for in-progress / awaiting-review plans.
+      if (fallbackPlan && fallbackPlan.reportId && !(await ReportData.exists({ _id: fallbackPlan.reportId, userId }))) {
+        fallbackPlan = null;
+      }
 
       if (fallbackPlan) {
         const isGenerating = fallbackPlan.status === "pending" || fallbackPlan.status === "generating";
