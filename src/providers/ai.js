@@ -231,10 +231,6 @@ async function streamChatClaude({
       const hasThinking = Object.keys(thinkingMap).length > 0;
 
       if (finalMsg.stop_reason === "end_turn") {
-        if (allToolUses.length > 0) {
-          emit({ type: "narration", phase: "start", name: "__synthesis", toolIndex: toolCallCount,
-                 segmentIndex: toolCallCount - 1, text: persona === "doctor" ? "Synthesizing the assessment…" : "Putting it together…" });
-        }
         emit({ type: "done", toolUses: allToolUses, thinkingMap: hasThinking ? thinkingMap : null });
         return { text: accText, toolUses: allToolUses, thinkingMap: hasThinking ? thinkingMap : null };
       }
@@ -396,9 +392,6 @@ async function _streamChatGemini({
 
     // If no function calls, we're done
     if (pendingFunctionCalls.length === 0) {
-      if (allToolUses.length > 0) {
-        emit({ type: "narration", phase: "start", name: "__synthesis", toolIndex: toolStep, segmentIndex: -1, text: persona === "doctor" ? "Synthesizing the assessment…" : "Putting it together…" });
-      }
       emit({ type: "done", toolUses: allToolUses, thinkingMap: null });
       return { text: accText, toolUses: allToolUses, thinkingMap: null };
     }
