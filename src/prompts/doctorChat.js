@@ -94,6 +94,10 @@ You have access to the following tools — all operate on the selected patient's
 
 // ── Block 1: Doctor Output Contract (CACHED) ────────────────────────────────
 
+const DOCTOR_REASONING = `<reasoning_discipline>
+Your reasoning is surfaced to the clinician as a live step timeline. Narrate like a peer consultant thinking aloud — concise, clinical, one short line per step. Before each tool call the user already sees a system step label (e.g. "Pulling the patient's flagged labs…"); your thinking should add the *why* ("Checking ferritin trend before commenting on fatigue"), never restate the label and never paste raw tool JSON, field names, vector scores, or ids. End each turn with the clinical answer only — no meta-commentary about your process.
+</reasoning_discipline>`
+
 const DOCTOR_CONTRACT = `<output_contract>
 
 <response_structure>
@@ -168,13 +172,18 @@ function buildDoctorSystemPrompt(patientContext = {}) {
     const dynamicBlock = buildDoctorDynamicContext(patientContext)
 
     if (getProvider() === 'gemini') {
-        return `${DOCTOR_IDENTITY_SAFETY_TOOLS}\n\n${DOCTOR_CONTRACT}\n\n${dynamicBlock}`
+        return `${DOCTOR_IDENTITY_SAFETY_TOOLS}\n\n${DOCTOR_REASONING}\n\n${DOCTOR_CONTRACT}\n\n${dynamicBlock}`
     }
 
     return [
         {
             type: 'text',
             text: DOCTOR_IDENTITY_SAFETY_TOOLS,
+            cache_control: { type: 'ephemeral' },
+        },
+        {
+            type: 'text',
+            text: DOCTOR_REASONING,
             cache_control: { type: 'ephemeral' },
         },
         {

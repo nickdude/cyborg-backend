@@ -400,8 +400,12 @@ const sendDoctorMessage = async (req, res, next) => {
     res.flushHeaders();
 
     const emit = (data) => {
-      if (!res.writableEnded) {
+      if (res.writableEnded || res.destroyed || !res.writable) return;
+      try {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
+      } catch (err) {
+        // Client disconnected — swallow so the agentic loop continues
+        // and the final chat.save() still runs.
       }
     };
 
@@ -415,6 +419,7 @@ const sendDoctorMessage = async (req, res, next) => {
           return sanitizeForModel(result);
         },
         emit,
+        persona: "doctor",
         enableThinking: isThinkingEnabled() && getProvider() === "claude",
         thinkingBudget: getThinkingBudget(),
       });
