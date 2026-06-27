@@ -287,6 +287,9 @@ const sendMessage = async (req, res, next) => {
         emit,
         enableThinking,
         thinkingBudget,
+        // Stop the agent loop if the client disconnects or the wall-clock
+        // timeout ends the response — avoids running tools nobody will see.
+        isAborted: () => res.writableEnded || res.destroyed,
       });
       const { text, toolUses, thinkingMap } = await Promise.race([
         streamPromise,
