@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const Memory = require("../models/Memory");
 const { generateEmbedding } = require("../services/embeddings");
 
@@ -197,7 +198,7 @@ const recallMemoriesTool = {
     if (queryEmbedding) {
       // -- Tier 1: Atlas vector search --------------------------------------
       try {
-        const vectorFilter = { userId: { $oid: userId.toString() }, isActive: true };
+        const vectorFilter = { userId: new mongoose.Types.ObjectId(userId.toString()), isActive: true };
         if (category !== 'all') vectorFilter.category = category;
 
         const results = await Memory.aggregate([

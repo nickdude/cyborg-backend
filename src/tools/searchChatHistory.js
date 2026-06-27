@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const ChatSummary = require("../models/ChatSummary");
 const { generateEmbedding } = require("../services/embeddings");
 
@@ -35,7 +36,7 @@ async function execute(input, userId, chatId) {
           queryVector: embedding,
           numCandidates: 20,
           limit,
-          filter: { userId: { $oid: userId.toString() } },
+          filter: { userId: new mongoose.Types.ObjectId(userId.toString()) },
         },
       },
       {
