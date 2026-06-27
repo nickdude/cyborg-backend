@@ -5,7 +5,7 @@ const User = require("../models/User");
 const WearableData = require("../models/WearableData");
 const { notify, notifyDoctor } = require("../utils/notificationHelper");
 const { detectIssues } = require("../utils/issueDetector");
-const { generateGoals } = require("../utils/goalGenerator");
+const { generateGoals, hasContraindication } = require("../utils/goalGenerator");
 const { generateNarratives } = require("../prompts/goalNarrative");
 const { buildPatientContext } = require("../utils/goalHelpers");
 const { computeDeltas } = require("./deltaTracker");
@@ -20,6 +20,26 @@ function withTimeout(promise, ms, label) {
       setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
     ),
   ]);
+}
+
+// AMINO 9 is always offered as a foundational supplement in every action plan,
+// unless it is unsafe for the patient (contraindicated) or they already take it.
+const AMINO9_ITEM = {
+  productName: "AMINO9 (Essential Amino Acids)",
+  dosing: "1 scoop (10 g EAAs) peri-workout or between meals.",
+  contraindications: { medications: [], allergies: [] },
+};
+
+function ensureAmino9(items, onboardingData) {
+  // Normalized name match — tolerant of spelling ("AMINO 9" vs "AMINO9 (Essential Amino Acids)").
+  const isAmino9 = (name) =>
+    String(name || "").toLowerCase().replace(/[^a-z0-9]/g, "").includes("amino9");
+  // Already recommended in this protocol, or already taken by the patient → don't duplicate.
+  if (items.some((it) => isAmino9(it.productName))) return items;
+  if ((onboardingData?.supplements || []).some(isAmino9)) return items;
+  // Honor the contraindication safety gate the template pipeline uses.
+  if (hasContraindication(AMINO9_ITEM.contraindications, onboardingData)) return items;
+  return [...items, { productName: AMINO9_ITEM.productName, dosing: AMINO9_ITEM.dosing }];
 }
 
 function mapSkeletonsToBiomarkerEvidence(goalSkeletons, narratives) {
@@ -107,9 +127,9 @@ function buildHealthReport(reportData) {
   }
 
   return {
-    cyborgScore: scores.cyborgScore?.final ?? scores.cyborgScore?.score ?? null,
+    cyborgScore: scores.cyborgScore?.final ?? null,
     bioAge: {
-      phenoAge: scores.bioAge?.bioAge ?? null,
+      phenoAge: scores.bioAge?.phenoAge ?? null,
       delta: scores.bioAge?.delta ?? null,
     },
     markerCounts: { total: tested.length, optimal, inRange, outOfRange },
@@ -238,7 +258,10 @@ async function triggerGoalsAndActionPlan(userId, reportId, planId) {
 
     // Step 7: AI Call 2 — generate protocol + next steps (with timeout)
     console.log("[ActionPlan] Generating protocol...");
-    const allProtocolItems = goalsWithDeltas.flatMap((g) => g.protocolItems || []);
+    const allProtocolItems = ensureAmino9(
+      goalsWithDeltas.flatMap((g) => g.protocolItems || []),
+      onboardingData
+    );
     const protocolResult = await withTimeout(
       generateProtocol({
         patientContext,
@@ -320,4 +343,4 @@ async function triggerGoalsAndActionPlan(userId, reportId, planId) {
   }
 }
 
-module.exports = { triggerGoalsAndActionPlan };
+module.exports = { triggerGoalsAndActionPlan, ensureAmino9 };

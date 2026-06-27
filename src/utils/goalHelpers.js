@@ -34,8 +34,8 @@ function buildPatientContext(user, reportData) {
     focusAreas: od.focusAreas || [],
     familyHistory: od.familyHistory || [],
     technicalLevel: od.technicalLevel || "standard",
-    superpowerScore: scores.cyborgScore?.score ?? null,
-    bioAge: scores.bioAge?.bioAge ?? null,
+    superpowerScore: scores.cyborgScore?.final ?? null,
+    bioAge: scores.bioAge?.phenoAge ?? null,
     categoryGrades: scores.categoryGrades || {},
   };
 }

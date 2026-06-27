@@ -218,4 +218,4 @@ function generateGoals(detectedIssues, onboardingData, biomarkerPanel) {
   return goals.map(({ sumPriority, priorityScore, goalAligned, ...rest }) => rest)
 }
 
-module.exports = { generateGoals };
+module.exports = { generateGoals, hasContraindication };
