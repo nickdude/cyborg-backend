@@ -27,9 +27,16 @@ function cosineSimilarity(a, b) {
 
 const MAX_MEMORIES_PER_USER = 200;
 const EMBEDDING_DEDUP_THRESHOLD = 0.85;
-// Minimum similarity required for a memory to surface in recall results.
-// Below this floor a result is considered noise, not relevant context.
-const MIN_RECALL_SIMILARITY = 0.5;
+// Minimum RAW cosine similarity (∈ [-1, 1]) required for a memory to surface in
+// recall results. Below this floor a result is considered noise, not relevant
+// context. NOTE on the two score scales used downstream:
+//   - Atlas $vectorSearch `vectorSearchScore` for cosine is normalized to
+//     (1 + cos) / 2 ∈ [0, 1], so it must be converted back to raw cosine
+//     (2 * score - 1) before comparing against this floor.
+//   - The in-memory cosineSimilarity() helper returns raw cosine directly and
+//     compares against this floor as-is.
+// 0.4 is a defensible floor — loosely relevant but not noise; tune as needed.
+const MIN_RECALL_COSINE = 0.4;
 
 // -- save_memory -------------------------------------------------------------
 
@@ -255,8 +262,9 @@ const recallMemoriesTool = {
           },
         ]);
 
-        // Apply relevance threshold — drop noise results below the similarity floor
-        const aboveThreshold = results.filter(r => (r.score ?? 0) >= MIN_RECALL_SIMILARITY);
+        // Apply relevance threshold — drop noise results below the similarity floor.
+        // Atlas cosine score is (1 + cos) / 2 ∈ [0, 1]; convert to raw cosine first.
+        const aboveThreshold = results.filter(r => (2 * (r.score ?? 0) - 1) >= MIN_RECALL_COSINE);
         if (aboveThreshold.length > 0) {
           return {
             method: 'vector',
@@ -291,7 +299,8 @@ const recallMemoriesTool = {
         if (memoriesWithEmbeddings.length > 0) {
           const scored = memoriesWithEmbeddings
             .map(m => ({ ...m, score: cosineSimilarity(queryEmbedding, m.embedding) }))
-            .filter(m => m.score >= MIN_RECALL_SIMILARITY) // drop noise below similarity floor
+            // cosineSimilarity returns RAW cosine ∈ [-1, 1]; compare directly.
+            .filter(m => m.score >= MIN_RECALL_COSINE) // drop noise below similarity floor
             .sort((a, b) => b.score - a.score)
             .slice(0, limit);
 
@@ -331,7 +340,7 @@ const recallMemoriesTool = {
 
     const queryTokens = tokenize(query);
     if (queryTokens.length === 0) {
-      const recent = memories.slice(0, limit).map(formatMemory);
+      const recent = memories.slice(0, limit).map((m) => formatMemory(m));
       return { method: 'keyword', query, results: recent, result_count: recent.length };
     }
 
@@ -362,7 +371,7 @@ const recallMemoriesTool = {
     const topResults = scored
       .filter(m => m.score > 0)
       .slice(0, limit)
-      .map(formatMemory);
+      .map((m) => formatMemory(m));
 
     return {
       method: 'keyword',
