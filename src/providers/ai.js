@@ -549,17 +549,25 @@ async function _parseVisionGemini({ buffer, mimeType, filename, systemPrompt, us
  * @param {string} opts.systemPrompt - System prompt
  * @param {string} opts.userPrompt - User message
  * @param {number} [opts.maxTokens=4096] - Max output tokens
+ * @param {number} [opts.temperature] - Sampling temperature (0-1). When omitted,
+ *   the provider's default temperature is used (unchanged legacy behavior).
  * @returns {Promise<string>} The generated text
  */
-async function generateText({ systemPrompt, userPrompt, maxTokens = 4096 }) {
+async function generateText({ systemPrompt, userPrompt, maxTokens = 4096, temperature }) {
   const provider = getProvider();
   const model = getModelName();
 
   if (provider === "gemini") {
     const runGeminiText = async (useFallback) => {
       const genAI = getGeminiClient(useFallback);
-      const genModel = genAI.getGenerativeModel({ model, systemInstruction: systemPrompt });
-      console.log(`[Gemini Text] -> model: ${model} | fallback: ${useFallback}`);
+      const genModel = genAI.getGenerativeModel({
+        model,
+        systemInstruction: systemPrompt,
+        // Only set generationConfig when a temperature is provided, so existing
+        // callers keep the provider default.
+        ...(temperature !== undefined && { generationConfig: { temperature } }),
+      });
+      console.log(`[Gemini Text] -> model: ${model} | fallback: ${useFallback} | temp: ${temperature ?? "default"}`);
       const result = await genModel.generateContent(userPrompt);
       const text = result.response.text();
       const usage = result.response.usageMetadata || {};
@@ -579,12 +587,15 @@ async function generateText({ systemPrompt, userPrompt, maxTokens = 4096 }) {
 
   // Claude
   const anthropic = getAnthropicClient();
-  console.log(`[Claude Text] -> model: ${model}`);
+  console.log(`[Claude Text] -> model: ${model} | temp: ${temperature ?? "default"}`);
 
   const response = await anthropic.messages.create({
     model,
     max_tokens: maxTokens,
     system: systemPrompt,
+    // Only pass temperature when provided, so existing callers keep the
+    // provider default.
+    ...(temperature !== undefined && { temperature }),
     messages: [{ role: "user", content: userPrompt }],
   });
 

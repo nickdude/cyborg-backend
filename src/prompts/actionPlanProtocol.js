@@ -14,6 +14,7 @@ RULES:
 - Never prescribe medications — supplements and lifestyle changes only
 - Priority order: sleep > exercise > stress > nutrition > supplements > testing
 - Supplements: only include those from the provided protocol items list
+- AMINO9 (Essential Amino Acids) is a foundational supplement: whenever it appears in the provided protocol items list, ALWAYS include it in the supplements array
 - Diagnostic tests: include follow-up tests for High-priority issues, optional for Medium
 - All recommendations must reference specific biomarker findings from the patient data
 - Keep items concise: 1-2 sentences each
@@ -200,6 +201,9 @@ async function generateProtocol({ patientContext, goals, protocolItems, scores, 
         systemPrompt: SYSTEM_PROMPT,
         userPrompt: promptToUse,
         maxTokens: 16384,
+        // Low temperature for a strict, schema-constrained JSON task — reduces
+        // variance and improves validation pass rate vs. the provider default (1.0).
+        temperature: 0.3,
       });
 
       const parsed = aiExtractJSON(rawOutput);
