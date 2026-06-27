@@ -14,6 +14,7 @@
 
 const Anthropic = require("@anthropic-ai/sdk").default || require("@anthropic-ai/sdk");
 const { GoogleGenerativeAI, FunctionCallingMode } = require("@google/generative-ai");
+const { narrateStart, narrateEnd } = require("../services/toolNarration");
 
 // --- Provider detection (lazy -- env may not be loaded at import time) -------
 
@@ -160,7 +161,7 @@ async function streamChat(opts) {
 
 async function streamChatClaude({
   messages, systemPrompt, tools, executeTool, emit,
-  enableThinking = false, thinkingBudget = 8000,
+  enableThinking = false, thinkingBudget = 8000, persona = "concierge",
 }) {
   const anthropic = getAnthropicClient();
   const model = getModelName();
@@ -230,6 +231,10 @@ async function streamChatClaude({
       const hasThinking = Object.keys(thinkingMap).length > 0;
 
       if (finalMsg.stop_reason === "end_turn") {
+        if (allToolUses.length > 0) {
+          emit({ type: "narration", phase: "start", name: "__synthesis", toolIndex: toolCallCount,
+                 segmentIndex: toolCallCount - 1, text: persona === "doctor" ? "Synthesizing the assessment…" : "Putting it together…" });
+        }
         emit({ type: "done", toolUses: allToolUses, thinkingMap: hasThinking ? thinkingMap : null });
         return { text: accText, toolUses: allToolUses, thinkingMap: hasThinking ? thinkingMap : null };
       }
@@ -238,11 +243,18 @@ async function streamChatClaude({
         const toolUseBlocks = finalMsg.content.filter((b) => b.type === "tool_use");
         const toolResults = [];
 
-        for (const toolUse of toolUseBlocks) {
-          emit({ type: "toolStart", name: toolUse.name, input: toolUse.input });
+        // segmentIndex (above) = toolCallCount - 1: the reasoning segment that produced THIS batch.
+        for (let bi = 0; bi < toolUseBlocks.length; bi++) {
+          const toolUse = toolUseBlocks[bi];
+          const toolIndex = toolCallCount + bi;            // unique per tool
+          const startLine = narrateStart(toolUse.name, toolUse.input, persona);
+          emit({ type: "narration", phase: "start", name: toolUse.name, toolIndex, segmentIndex, text: startLine });
+          emit({ type: "toolStart", name: toolUse.name, input: toolUse.input, toolIndex });
           const result = await executeTool(toolUse.name, toolUse.input);
-          emit({ type: "toolEnd", name: toolUse.name, ok: !result.error, result });
-          allToolUses.push({ name: toolUse.name, input: toolUse.input, result });
+          emit({ type: "toolEnd", name: toolUse.name, ok: !result.error, result, toolIndex });
+          const endLine = narrateEnd(toolUse.name, result);
+          if (endLine) emit({ type: "narration", phase: "end", name: toolUse.name, toolIndex, text: endLine });
+          allToolUses.push({ name: toolUse.name, input: toolUse.input, result, toolIndex, segmentIndex, narration: { start: startLine, end: endLine } });
           toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: JSON.stringify(result) });
         }
 
