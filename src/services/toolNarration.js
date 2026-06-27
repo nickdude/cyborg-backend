@@ -65,22 +65,27 @@ function narrateEnd(name, result) {
   if (!result || result.error) return null; // no end-line on failure
   switch (name) {
     case "getWearableData":
-      return typeof result.daysFound === "number"
+      // 0-days means no data was found — say nothing rather than "Reviewed 0 day(s)"
+      return (typeof result.daysFound === "number" && result.daysFound > 0)
         ? `Reviewed ${result.daysFound} day(s) of wearable data.` : null;
     case "getMealData":
-      return typeof result.totalMeals === "number"
+      return (typeof result.totalMeals === "number" && result.totalMeals > 0)
         ? `Looked over ${result.totalMeals} logged meal(s).` : null;
-    case "recallMemories":
-      return typeof result.result_count === "number"
-        ? `Recalled ${result.result_count} relevant note(s).`
-        : (Array.isArray(result.results) ? `Recalled ${result.results.length} relevant note(s).` : null);
+    case "recallMemories": {
+      const n = typeof result.result_count === "number"
+        ? result.result_count
+        : (Array.isArray(result.results) ? result.results.length : null);
+      return (n != null && n > 0) ? `Recalled ${n} relevant note(s).` : null;
+    }
     case "searchChatHistory": {
       const n = result.resultCount ?? result.result_count ?? (Array.isArray(result.results) ? result.results.length : null);
-      return n == null ? null : `Found ${n} related past chat(s).`;
+      return (n != null && n > 0) ? `Found ${n} related past chat(s).` : null;
     }
     case "searchMedicalEvidence":
-    case "webSearch":
-      return Array.isArray(result.citations) ? `Pulled ${result.citations.length} source(s).` : null;
+    case "webSearch": {
+      const c = Array.isArray(result.citations) ? result.citations.length : null;
+      return (c != null && c > 0) ? `Pulled ${c} source(s).` : null;
+    }
     case "saveMemory":
       return result.saved ? "Saved." : null;
     default:

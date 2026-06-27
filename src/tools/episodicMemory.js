@@ -13,6 +13,8 @@ function tokenize(text) {
 }
 
 function cosineSimilarity(a, b) {
+  // Guard against null, empty, or dimension-mismatched vectors to prevent NaN poisoning
+  if (!a || !b || a.length !== b.length || a.length === 0) return 0;
   let dot = 0, magA = 0, magB = 0;
   for (let i = 0; i < a.length; i++) {
     dot += a[i] * b[i];
@@ -25,6 +27,9 @@ function cosineSimilarity(a, b) {
 
 const MAX_MEMORIES_PER_USER = 200;
 const EMBEDDING_DEDUP_THRESHOLD = 0.85;
+// Minimum similarity required for a memory to surface in recall results.
+// Below this floor a result is considered noise, not relevant context.
+const MIN_RECALL_SIMILARITY = 0.5;
 
 // -- save_memory -------------------------------------------------------------
 
@@ -114,20 +119,44 @@ const saveMemoryTool = {
       console.warn('[saveMemory] Embedding generation failed, skipping semantic dedup:', err.message);
     }
 
-    // -- Cap enforcement ----------------------------------------------------
+    // Bounded retry: if embedding is still null (all keys exhausted above), try once more
+    // so the saved memory gets a vector and is visible to semantic recall.
+    if (!newEmbedding) {
+      try {
+        newEmbedding = await generateEmbedding(content);
+      } catch (retryErr) {
+        console.warn(
+          '[saveMemory] WARN: Embedding retry failed — memory will be saved WITHOUT vector embedding' +
+          ' and will be INVISIBLE to semantic (vector/cosine) recall:',
+          retryErr.message
+        );
+      }
+    }
+
+    // -- Cap enforcement (hard ceiling) -------------------------------------
+    // Evict oldest-low first, then oldest-medium, then oldest-any — so the cap
+    // always holds even when the collection is entirely high-importance memories.
     const totalCount = await Memory.countDocuments({ userId, isActive: true });
     if (totalCount >= MAX_MEMORIES_PER_USER) {
-      const evicted = await Memory.findOneAndUpdate(
+      const evictedLow = await Memory.findOneAndUpdate(
         { userId, isActive: true, importance: 'low' },
         { isActive: false },
         { sort: { createdAt: 1 } }
       );
-      if (!evicted) {
-        await Memory.findOneAndUpdate(
+      if (!evictedLow) {
+        const evictedMedium = await Memory.findOneAndUpdate(
           { userId, isActive: true, importance: 'medium' },
           { isActive: false },
           { sort: { createdAt: 1 } }
         );
+        if (!evictedMedium) {
+          // Hard cap: only high-importance memories remain — still must evict to hold the ceiling
+          await Memory.findOneAndUpdate(
+            { userId, isActive: true },
+            { isActive: false },
+            { sort: { createdAt: 1 } }
+          );
+        }
       }
     }
 
@@ -207,7 +236,8 @@ const recallMemoriesTool = {
               index: 'memoriesVector',
               path: 'embedding',
               queryVector: queryEmbedding,
-              numCandidates: 50,
+              // Atlas recommends numCandidates >> limit; use ~15x for reliable recall
+              numCandidates: Math.max(100, limit * 15),
               limit,
               filter: vectorFilter,
             },
@@ -225,11 +255,13 @@ const recallMemoriesTool = {
           },
         ]);
 
-        if (results.length > 0) {
+        // Apply relevance threshold — drop noise results below the similarity floor
+        const aboveThreshold = results.filter(r => (r.score ?? 0) >= MIN_RECALL_SIMILARITY);
+        if (aboveThreshold.length > 0) {
           return {
             method: 'vector',
             query,
-            results: results.map(r => ({
+            results: aboveThreshold.map(r => ({
               memory_id: r._id.toString(),
               content: r.content,
               category: r.category,
@@ -238,8 +270,9 @@ const recallMemoriesTool = {
               source: r.source,
               created_at: r.createdAt,
               relevance_score: Math.round((r.score ?? 0) * 100) / 100,
+              match: 'semantic',
             })),
-            result_count: results.length,
+            result_count: aboveThreshold.length,
           };
         }
       } catch (err) {
@@ -258,24 +291,28 @@ const recallMemoriesTool = {
         if (memoriesWithEmbeddings.length > 0) {
           const scored = memoriesWithEmbeddings
             .map(m => ({ ...m, score: cosineSimilarity(queryEmbedding, m.embedding) }))
+            .filter(m => m.score >= MIN_RECALL_SIMILARITY) // drop noise below similarity floor
             .sort((a, b) => b.score - a.score)
             .slice(0, limit);
 
-          return {
-            method: 'cosine',
-            query,
-            results: scored.map(r => ({
-              memory_id: r._id.toString(),
-              content: r.content,
-              category: r.category,
-              tags: r.tags,
-              importance: r.importance,
-              source: r.source,
-              created_at: r.createdAt,
-              relevance_score: Math.round(r.score * 100) / 100,
-            })),
-            result_count: scored.length,
-          };
+          if (scored.length > 0) {
+            return {
+              method: 'cosine',
+              query,
+              results: scored.map(r => ({
+                memory_id: r._id.toString(),
+                content: r.content,
+                category: r.category,
+                tags: r.tags,
+                importance: r.importance,
+                source: r.source,
+                created_at: r.createdAt,
+                relevance_score: Math.round(r.score * 100) / 100,
+                match: 'semantic',
+              })),
+              result_count: scored.length,
+            };
+          }
         }
       } catch (err) {
         console.warn('[recallMemories] Cosine fallback failed, using keyword search:', err.message);
@@ -337,7 +374,10 @@ const recallMemoriesTool = {
   },
 };
 
-function formatMemory(mem) {
+function formatMemory(mem, match = 'keyword') {
+  // Keyword scores are composite and unbounded; clamp to [0, 1] for a consistent scale.
+  const raw = mem.score !== undefined ? mem.score : undefined;
+  const relevance_score = raw !== undefined ? Math.min(Math.round(raw * 100) / 100, 1) : undefined;
   return {
     memory_id: mem._id.toString(),
     content: mem.content,
@@ -346,7 +386,8 @@ function formatMemory(mem) {
     importance: mem.importance,
     source: mem.source,
     created_at: mem.createdAt,
-    relevance_score: mem.score !== undefined ? Math.round(mem.score * 100) / 100 : undefined,
+    relevance_score,
+    match,
   };
 }
 
