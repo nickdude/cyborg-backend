@@ -76,33 +76,40 @@ function sanitizeForModel(obj, seen = new WeakSet()) {
 
 /**
  * Map tool name to its execute function.
+ * Wraps all dispatches in try/catch so a thrown error (invalid AI-supplied id,
+ * DB error, etc.) degrades gracefully to { error } instead of aborting the stream.
  */
 async function executeToolByName(name, input, userId, chatId) {
-  switch (name) {
-    case "webSearch":
-      return webSearchExec(input, userId, chatId);
-    case "getMedicalData":
-      return getMedicalDataExec(input, userId, chatId);
-    case "suggestMedication":
-      return suggestMedicationExec(input, userId, chatId);
-    case "searchMedicalEvidence":
-      return searchMedicalEvidenceExec(input, userId, chatId);
-    case "getSchemaInfo":
-      return getSchemaInfoExec(input, userId, chatId);
-    case "searchChatHistory":
-      return searchChatHistoryExec(input, userId, chatId);
-    case "fetchFullChat":
-      return fetchFullChatExec(input, userId, chatId);
-    case "saveMemory":
-      return saveMemoryTool.execute(input, userId, chatId);
-    case "recallMemories":
-      return recallMemoriesTool.execute(input, userId, chatId);
-    case "getWearableData":
-      return getWearableDataExec(input, userId, chatId);
-    case "getMealData":
-      return getMealDataExec(input, userId, chatId);
-    default:
-      return { error: `Unknown tool: ${name}` };
+  try {
+    switch (name) {
+      case "webSearch":
+        return await webSearchExec(input, userId, chatId);
+      case "getMedicalData":
+        return await getMedicalDataExec(input, userId, chatId);
+      case "suggestMedication":
+        return await suggestMedicationExec(input, userId, chatId);
+      case "searchMedicalEvidence":
+        return await searchMedicalEvidenceExec(input, userId, chatId);
+      case "getSchemaInfo":
+        return await getSchemaInfoExec(input, userId, chatId);
+      case "searchChatHistory":
+        return await searchChatHistoryExec(input, userId, chatId);
+      case "fetchFullChat":
+        return await fetchFullChatExec(input, userId, chatId);
+      case "saveMemory":
+        return await saveMemoryTool.execute(input, userId, chatId);
+      case "recallMemories":
+        return await recallMemoriesTool.execute(input, userId, chatId);
+      case "getWearableData":
+        return await getWearableDataExec(input, userId, chatId);
+      case "getMealData":
+        return await getMealDataExec(input, userId, chatId);
+      default:
+        return { error: `Unknown tool: ${name}` };
+    }
+  } catch (err) {
+    console.error(`[Tool:${name}] Error:`, err.message);
+    return { error: err.message };
   }
 }
 

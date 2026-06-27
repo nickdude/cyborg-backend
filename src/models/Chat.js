@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 
 const messageSchema = new mongoose.Schema({
   role: { type: String, enum: ['user', 'assistant'], required: true },
-  content: { type: String, required: true },
+  content: { type: String, default: "" },
   toolUses: { type: mongoose.Schema.Types.Mixed, default: [] },
   thinking: { type: mongoose.Schema.Types.Mixed, default: null },
   // thinking is stored as { '-1': 'pre-tool reasoning', '0': 'after tool[0]', ... }
