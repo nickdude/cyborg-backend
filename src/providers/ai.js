@@ -197,16 +197,16 @@ async function streamChatClaude({
     try {
       const baseParams = {
         model,
-        max_tokens: thinkingEnabled ? Math.max(16000, thinkingBudget + 4096) : 4096,
+        max_tokens: thinkingEnabled ? 16000 : 4096,
         system: systemPrompt,
         tools,
         messages: currentMessages,
       };
 
       const stream = thinkingEnabled
-        ? anthropic.beta.messages.stream({
-            betas: ["interleaved-thinking-2025-05-14"],
-            thinking: { type: "enabled", budget_tokens: thinkingBudget },
+        ? anthropic.messages.stream({
+            thinking: { type: "adaptive", display: "summarized" },
+            output_config: { effort: process.env.THINKING_EFFORT || "high" },
             ...baseParams,
           })
         : anthropic.messages.stream(baseParams);
@@ -266,7 +266,7 @@ async function streamChatClaude({
       const status = err?.status || err?.statusCode;
 
       // Thinking unsupported -- disable and retry same turn
-      if (thinkingEnabled && status === 400 && (msg.includes("thinking") || msg.includes("budget_tokens") || msg.includes("interleaved"))) {
+      if (thinkingEnabled && status === 400 && (msg.includes("thinking") || msg.includes("budget_tokens") || msg.includes("interleaved") || msg.includes("adaptive") || msg.includes("effort") || msg.includes("output_config"))) {
         console.warn(`[Claude] Extended thinking not supported by model "${model}", falling back`);
         thinkingEnabled = false;
         emit({ type: "thinkingUnsupported" });
