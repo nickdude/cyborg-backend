@@ -826,6 +826,10 @@ function computePaceOfAging(bm) {
     let z = (v - ref.mean) / ref.sd
     if (!config.higher) z = -z // Invert for protective markers
 
+    // Clamp each marker's z-score so a single extreme or mis-unit value
+    // (e.g. WBC reported in /µL) cannot dominate / blow up the proxy.
+    z = Math.max(-3, Math.min(3, z))
+
     weightedSum += config.w * z
     totalWeight += config.w
   }
@@ -834,7 +838,9 @@ function computePaceOfAging(bm) {
 
   // Normalize and shift to mean = 1.0
   const pace = 1.0 + (weightedSum / totalWeight) * 0.12 // SD ≈ 0.12
-  const roundedPace = Math.round(pace * 100) / 100
+  // Clamp to a physiologically plausible DunedinPACE range as a final guard.
+  const clampedPace = Math.max(0.5, Math.min(1.75, pace))
+  const roundedPace = Math.round(clampedPace * 100) / 100
 
   let grade
   if (roundedPace < 0.85) grade = 'A'

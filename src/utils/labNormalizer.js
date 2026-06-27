@@ -1962,6 +1962,30 @@ function resolveSexRanges(entry, sex) {
   }
 }
 
+// Cell-count markers whose canonical unit is K/µL (or M/µL for rbc). Some labs
+// report these as the raw absolute count per µL (e.g. WBC 10570 instead of 10.57,
+// platelets 240000 instead of 240). When a value sits far above any physiologically
+// plausible K/µL figure, it was reported in /µL — divide by 1000 to canonicalise.
+// Thresholds are set well above realistic K/µL values (even in disease) and well
+// below the /µL representation, so real K/µL values are never touched.
+const CELL_COUNT_SCALE_THRESHOLD = {
+  wbc: 300,
+  neutrophils_abs: 100,
+  lymphocytes_abs: 100,
+  monocytes_abs: 30,
+  eosinophils_abs: 30,
+  basophils_abs: 30,
+  platelets: 5000,
+}
+
+function scaleCellCount(canonicalName, value) {
+  const threshold = CELL_COUNT_SCALE_THRESHOLD[canonicalName]
+  if (threshold != null && value != null && value > threshold) {
+    return Math.round((value / 1000) * 100) / 100
+  }
+  return value
+}
+
 function normalizeTests(parsedData, sex) {
   if (!parsedData) return []
 
@@ -2003,6 +2027,9 @@ function normalizeTests(parsedData, sex) {
     if (entry && unit && entry.conversions[unit]) {
       finalValue = Math.round(entry.conversions[unit](numericValue) * 100) / 100
     }
+
+    // Canonicalise absolute cell counts reported in /µL → K/µL (or M/µL)
+    finalValue = scaleCellCount(canonicalName, finalValue)
 
     // Resolve sex-specific ranges (falls back to defaults for male/unknown)
     const ranges = resolveSexRanges(entry, sex)
