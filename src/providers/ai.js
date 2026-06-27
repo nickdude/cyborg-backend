@@ -304,21 +304,21 @@ async function streamChatClaude({
 // -- Gemini implementation ---------------------------------------------------
 
 async function streamChatGemini({
-  messages, systemPrompt, tools, executeTool, emit,
+  messages, systemPrompt, tools, executeTool, emit, persona = "concierge",
 }) {
   try {
-    return await _streamChatGemini({ messages, systemPrompt, tools, executeTool, emit, useFallback: false });
+    return await _streamChatGemini({ messages, systemPrompt, tools, executeTool, emit, persona, useFallback: false });
   } catch (err) {
     if (isGeminiKeyError(err)) {
       console.warn("[Gemini Chat] Primary key quota/rate error, retrying with fallback key");
-      return await _streamChatGemini({ messages, systemPrompt, tools, executeTool, emit, useFallback: true });
+      return await _streamChatGemini({ messages, systemPrompt, tools, executeTool, emit, persona, useFallback: true });
     }
     throw err;
   }
 }
 
 async function _streamChatGemini({
-  messages, systemPrompt, tools, executeTool, emit, useFallback = false,
+  messages, systemPrompt, tools, executeTool, emit, persona = "concierge", useFallback = false,
 }) {
   const genAI = getGeminiClient(useFallback);
   const model = getModelName();
@@ -360,6 +360,7 @@ async function _streamChatGemini({
 
   // Agentic loop -- keep calling until no more tool calls
   let currentInput = userText;
+  let toolStep = 0;
 
   while (true) {
     iteration++;
@@ -395,6 +396,9 @@ async function _streamChatGemini({
 
     // If no function calls, we're done
     if (pendingFunctionCalls.length === 0) {
+      if (allToolUses.length > 0) {
+        emit({ type: "narration", phase: "start", name: "__synthesis", toolIndex: toolStep, segmentIndex: -1, text: persona === "doctor" ? "Synthesizing the assessment…" : "Putting it together…" });
+      }
       emit({ type: "done", toolUses: allToolUses, thinkingMap: null });
       return { text: accText, toolUses: allToolUses, thinkingMap: null };
     }
@@ -402,15 +406,20 @@ async function _streamChatGemini({
     // Execute tool calls
     const functionResponses = [];
     for (const fc of pendingFunctionCalls) {
+      const toolIndex = toolStep++;
       console.log(`[Gemini] tool_call: ${fc.name} | input: ${JSON.stringify(fc.args)}`);
-      emit({ type: "toolStart", name: fc.name, input: fc.args });
+      const startLine = narrateStart(fc.name, fc.args, persona);
+      emit({ type: "narration", phase: "start", name: fc.name, toolIndex, segmentIndex: -1, text: startLine });
+      emit({ type: "toolStart", name: fc.name, input: fc.args, toolIndex });
 
       const result = await executeTool(fc.name, fc.args || {});
 
       console.log(`[Gemini] tool_result: ${fc.name} | ok: ${!result.error}`);
-      emit({ type: "toolEnd", name: fc.name, ok: !result.error, result });
+      emit({ type: "toolEnd", name: fc.name, ok: !result.error, result, toolIndex });
+      const endLine = narrateEnd(fc.name, result);
+      if (endLine) emit({ type: "narration", phase: "end", name: fc.name, toolIndex, text: endLine });
 
-      allToolUses.push({ name: fc.name, input: fc.args, result });
+      allToolUses.push({ name: fc.name, input: fc.args, result, toolIndex, segmentIndex: -1, narration: { start: startLine, end: endLine } });
       functionResponses.push({
         functionResponse: {
           name: fc.name,
