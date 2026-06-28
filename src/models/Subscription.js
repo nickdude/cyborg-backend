@@ -9,7 +9,7 @@ const subscriptionSchema = new mongoose.Schema(
     },
     planType: {
       type: String,
-      enum: ["advanced", "auto-pilot"],
+      enum: ["advanced", "auto-pilot", "baseline"],
       required: true,
     },
     planName: String,

@@ -41,6 +41,21 @@ const PLANS = {
     features: ["6-month subscription", "Subscription-based plan"],
     highlighted: false,
   },
+  // Free entry tier — AI Concierge access only, no payment (₹0). Activated via
+  // the dedicated /activate-free endpoint since Razorpay can't create a ₹0 order.
+  baseline: {
+    id: "baseline",
+    name: "AMINO9 Baseline",
+    price: 0,
+    amount: 0, // free — no Razorpay charge
+    currency: "INR",
+    billingPeriod: "month",
+    durationMonths: 1,
+    description: "Free plan — AI Concierge access for one month.",
+    features: ["AI Concierge access (1 month)", "5–6 interactions/day"],
+    highlighted: false,
+    free: true,
+  },
 };
 
 const getPlan = (planType) => PLANS[planType] || null;
@@ -90,6 +105,11 @@ const createOrder = async (req, res, next) => {
     const plan = getPlan(planType);
     if (!plan) {
       return res.sendError("Invalid plan type", 400);
+    }
+
+    // Free plans can't create a ₹0 Razorpay order — they go through /activate-free.
+    if (plan.amount <= 0) {
+      return res.sendError("This is a free plan; use /activate-free", 400);
     }
 
     // Create Razorpay order
@@ -281,10 +301,124 @@ const handleWebhook = async (req, res, next) => {
   }
 };
 
+// ============== ACTIVATE FREE PLAN ==============
+
+/**
+ * Activate a zero-cost plan (e.g. AMINO9 Baseline) without Razorpay — a free
+ * plan can't create a ₹0 order. Creates the active subscription directly,
+ * mirroring verifyPayment minus the payment verification.
+ */
+const activateFreePlan = async (req, res, next) => {
+  try {
+    const { userId, planType, firstName, lastName, email, zip, dob, phone } = req.body;
+
+    if (!userId || !planType) {
+      return res.sendError("User ID and plan type are required", 400);
+    }
+
+    const plan = getPlan(planType);
+    if (!plan) {
+      return res.sendError("Invalid plan type", 400);
+    }
+    // This endpoint only activates genuinely free plans — never a paid one.
+    if (plan.amount > 0) {
+      return res.sendError("This plan requires payment", 400);
+    }
+
+    // Persist any onboarding details supplied with the form (all optional here).
+    const profileUpdate = {};
+    if (firstName) profileUpdate.firstName = firstName;
+    if (lastName) profileUpdate.lastName = lastName;
+    if (email) profileUpdate.email = email;
+    if (phone) profileUpdate.phone = phone;
+    if (zip) profileUpdate.zipCode = zip;
+    if (dob) profileUpdate.dateOfBirth = new Date(dob);
+    if (Object.keys(profileUpdate).length) {
+      await User.findByIdAndUpdate(userId, profileUpdate);
+    }
+
+    // Don't stack a second active subscription if one already exists.
+    const existing = await Subscription.findOne({
+      userId,
+      status: "active",
+      expiryDate: { $gt: new Date() },
+    }).sort({ createdAt: -1 });
+    if (existing) {
+      return res.sendSuccess(
+        {
+          subscription: {
+            id: existing._id,
+            planType: existing.planType,
+            planName: existing.planName,
+            status: existing.status,
+            expiryDate: existing.expiryDate,
+          },
+          alreadyActive: true,
+        },
+        "Active subscription already exists"
+      );
+    }
+
+    const expiryDate = new Date();
+    expiryDate.setMonth(expiryDate.getMonth() + plan.durationMonths);
+
+    const subscription = new Subscription({
+      userId,
+      planType,
+      planName: plan.name,
+      amount: plan.amount, // 0
+      durationMonths: plan.durationMonths,
+      status: "active",
+      expiryDate,
+      autoRenew: false, // free tier doesn't auto-bill
+    });
+    await subscription.save();
+
+    // Mirror the paid flow: record history + notify (powers purchase history).
+    try {
+      const SubscriptionHistory = require("../models/SubscriptionHistory");
+      const { notify, EVENTS } = require("../services/notificationService");
+      await SubscriptionHistory.create({
+        userId,
+        subscriptionId: subscription._id,
+        planType,
+        planName: plan.name,
+        amount: plan.amount,
+        action: "purchased",
+        startDate: subscription.purchaseDate,
+        endDate: expiryDate,
+      });
+      await notify(userId, EVENTS.SUBSCRIPTION_PURCHASED, {
+        subscriptionId: subscription._id,
+        planName: plan.name,
+      });
+    } catch (e) {
+      console.error("[subscription] free-activation history/notify failed:", e.message);
+    }
+
+    res.sendSuccess(
+      {
+        subscription: {
+          id: subscription._id,
+          planType,
+          planName: plan.name,
+          status: "active",
+          expiryDate,
+        },
+      },
+      "Free plan activated",
+      201
+    );
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getAllPlans,
   createOrder,
   verifyPayment,
   getUserSubscription,
   handleWebhook,
+  activateFreePlan,
 };
