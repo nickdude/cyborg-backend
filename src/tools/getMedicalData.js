@@ -79,7 +79,7 @@ async function execute(input, userId, chatId) {
 
   if (input.include.includes('profile') || input.include.includes('onboarding')) {
     const user = await User.findById(userId)
-      .select('email firstName lastName dateOfBirth onboardingCompleted onboardingData onboardingAnswers createdAt')
+      .select('email firstName lastName dateOfBirth biologicalSex gender onboardingCompleted onboardingData onboardingAnswers createdAt')
       .lean();
 
     if (user) {
@@ -89,6 +89,8 @@ async function execute(input, userId, chatId) {
           firstName: user.firstName,
           lastName: user.lastName,
           dateOfBirth: user.dateOfBirth,
+          biologicalSex: user.biologicalSex || null,
+          gender: user.gender || null,
           memberSince: user.createdAt,
           onboardingCompleted: user.onboardingCompleted,
         };
