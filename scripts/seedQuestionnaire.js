@@ -30,7 +30,7 @@ const QUESTIONARY_DATA = [
           "Prefer not to say",
         ],
       },
-      { code: "1.5", title: "What is your weight (lbs)?", type: "text", placeholder: "Tell us here..." },
+      { code: "1.5", title: "What is your weight (Kg)?", type: "text", placeholder: "Tell us here..." },
       { code: "1.6", title: "What is your height (ft/in)?", type: "height" },
       { code: "1.7", title: "What do you do for work?", type: "text", placeholder: "Tell us here..." },
     ],
