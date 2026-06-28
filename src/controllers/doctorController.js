@@ -105,7 +105,7 @@ async function getPatientContext(patientId) {
       User.findById(patientId)
         .select("firstName onboardingCompleted onboardingData bloodReport bloodReports")
         .lean(),
-      CoreFact.find({ userId: patientId }).sort({ importance: 1 }).limit(30).lean(),
+      CoreFact.find({ userId: patientId }).sort({ importance: 1 }).limit(30).lean().catch(() => []),
     ]);
     if (!user) return {};
     return {
@@ -269,7 +269,7 @@ const getPatient = async (req, res, next) => {
       User.findById(patientId)
         .select("firstName lastName email phone dateOfBirth biologicalSex onboardingCompleted onboardingData bloodReport bloodReports")
         .lean(),
-      CoreFact.find({ userId: patientId }).sort({ importance: 1 }).limit(30).lean(),
+      CoreFact.find({ userId: patientId }).sort({ importance: 1 }).limit(30).lean().catch(() => []),
       ReportData.findOne({ userId: patientId }).sort({ createdAt: -1 })
         .select("biomarkerPanel scores reportDate parsedData createdAt")
         .lean(),

@@ -8,7 +8,7 @@ function getVectorDb() {
   const uri = process.env.VECTOR_DB_URI;
   if (!uri) throw new Error("VECTOR_DB_URI is not set in .env");
 
-  _vectorConn = mongoose.createConnection(uri);
+  _vectorConn = mongoose.createConnection(uri, { serverSelectionTimeoutMS: 20000 });
   _vectorConn.on("connected", () => console.log(`[VectorDB] Connected to ${_vectorConn.name}`));
   _vectorConn.on("error", (err) => console.error("[VectorDB] Connection error:", err.message));
   _vectorConn.on("disconnected", () => console.warn("[VectorDB] Disconnected"));

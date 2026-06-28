@@ -2,6 +2,7 @@ require("dotenv").config();
 const crypto = require("crypto");
 const app = require("./app");
 const connectDB = require("./config/db");
+const { getVectorDb } = require("./config/vectorDb");
 const seedQuestionnaire = require("../scripts/seedQuestionnaire");
 const { buildDatabaseSchema } = require("./utils/schemaBuilder");
 
@@ -168,6 +169,9 @@ const PORT = process.env.PORT || 5000;
 
 connectDB().then(() => {
   seedQuestionnaire();
+  // Eagerly open the vector-DB connection (CoreFacts / memories) so the first
+  // query after a restart doesn't buffer-timeout while it's still connecting.
+  getVectorDb();
   backfillDoctorReferralCodes().catch((err) =>
     console.error("[Backfill] Failed:", err.message)
   );
