@@ -95,6 +95,28 @@ function isOverloadedError(err) {
   return (err?.message || "").toLowerCase().includes("overloaded");
 }
 
+const CONN_RETRY_DELAYS_MS = [400, 1200]; // brief retries for dropped connections
+
+// Transport-level failures: socket closed mid-stream, fetch failed, DNS/connect
+// resets. These carry NO HTTP status, so they're distinct from 4xx/5xx (incl.
+// the 529 overload handled above). Anthropic surfaces them as APIConnectionError
+// wrapping an undici SocketError (e.g. UND_ERR_SOCKET "other side closed").
+function isConnectionError(err) {
+  if (!err) return false;
+  const name = err?.name || err?.constructor?.name || "";
+  if (name === "APIConnectionError" || name === "APIConnectionTimeoutError") return true;
+  const code = err?.code || err?.cause?.code;
+  if (["UND_ERR_SOCKET", "ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "EPIPE", "ENOTFOUND", "EAI_AGAIN"].includes(code)) return true;
+  const msg = `${err?.message || ""} ${err?.cause?.message || ""}`.toLowerCase();
+  return (
+    msg.includes("other side closed") ||
+    msg.includes("fetch failed") ||
+    msg.includes("connection error") ||
+    msg.includes("socket hang up") ||
+    msg.includes("terminated")
+  );
+}
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // --- Claude client ----------------------------------------------------------
@@ -181,6 +203,7 @@ async function streamChatClaude({
   let thinkingEnabled = enableThinking;
   let iteration = 0;
   let overloadRetries = 0;
+  let connRetries = 0;
 
   const MAX_ITERATIONS = parseInt(process.env.MAX_TOOL_ITERATIONS || "12", 10);
   const MAX_TOOL_CALLS = parseInt(process.env.MAX_TOOL_CALLS || "25", 10);
@@ -283,6 +306,7 @@ async function streamChatClaude({
           { role: "user", content: toolResults },
         ];
         overloadRetries = 0;
+        connRetries = 0;
         continue;
       }
 
@@ -316,6 +340,28 @@ async function streamChatClaude({
         overloadRetries++;
         iteration--;  // don't count this as a new logical turn
         continue;
+      }
+
+      // Dropped connection (socket closed mid-stream, fetch failed). Retry ONLY
+      // when nothing was streamed to the client this attempt — otherwise a retry
+      // would re-send already-delivered tokens (duplicate output). If the client
+      // itself went away, the abort closed the socket: stop cleanly, don't retry.
+      if (isConnectionError(err)) {
+        if (isAborted()) {
+          console.warn("[Claude] connection ended after client abort; stopping cleanly");
+          return { text: accText, toolUses: allToolUses, thinkingMap: Object.keys(thinkingMap).length ? thinkingMap : null };
+        }
+        const emittedThisAttempt = accText.length > 0 || (thinkingMap[segmentIndex]?.length > 0);
+        if (!emittedThisAttempt && connRetries < CONN_RETRY_DELAYS_MS.length) {
+          const delay = CONN_RETRY_DELAYS_MS[connRetries];
+          console.warn(`[Claude] Connection dropped (${err?.message}) -- retry ${connRetries + 1}/${CONN_RETRY_DELAYS_MS.length} in ${delay}ms`);
+          if (thinkingMap[segmentIndex]) thinkingMap[segmentIndex] = "";
+          await sleep(delay);
+          connRetries++;
+          iteration--;  // don't count this as a new logical turn
+          continue;
+        }
+        console.warn(`[Claude] Connection dropped${emittedThisAttempt ? " after partial output" : " (retries exhausted)"}; surfacing to client`);
       }
 
       throw err;
