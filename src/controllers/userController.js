@@ -278,6 +278,30 @@ const updateUserProfile = async (req, res, next) => {
       return res.sendError("User not found", 404);
     }
 
+    // Keep the onboarding questionnaire in sync with profile edits: write the
+    // canonical fields back to the user's existing OnboardingAnswer doc
+    // (1.3 = biological sex, 1.3a = date of birth). If they have no onboarding
+    // doc yet, skip — getMedicalData already falls back to the profile. Only
+    // touch fields the request actually sent. `answers` is a Mixed field whose
+    // keys contain dots ("1.3"), so we mutate + markModified rather than $set.
+    const SEX_VALUES = ["Male", "Female", "Other", "Prefer not to say"];
+    const syncSex = biologicalSex && SEX_VALUES.includes(biologicalSex);
+    if (syncSex || dateOfBirth) {
+      try {
+        const oa = await OnboardingAnswer.findOne({ userId });
+        if (oa) {
+          oa.answers = oa.answers || {};
+          if (syncSex) oa.answers["1.3"] = biologicalSex;
+          if (dateOfBirth) oa.answers["1.3a"] = dateOfBirth;
+          oa.markModified("answers");
+          await oa.save();
+        }
+      } catch (syncErr) {
+        // Sync is best-effort; never fail the profile update because of it.
+        console.warn("[updateUserProfile] onboarding sync failed:", syncErr.message);
+      }
+    }
+
     res.sendSuccess({ user }, "Profile updated successfully");
   } catch (error) {
     next(error);
