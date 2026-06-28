@@ -49,6 +49,15 @@ const saveOnboardingAnswers = async (req, res, next) => {
       }
     }
 
+    // Map biological sex (question "1.3") onto the user so the profile stays in
+    // sync with the questionnaire and tools/scoring can read user.biologicalSex
+    // directly. Only write a recognized enum value — never garbage.
+    const SEX_VALUES = ["Male", "Female", "Other", "Prefer not to say"];
+    const sexAnswer = answers && (answers["1.3"] || answers.biologicalSex);
+    if (sexAnswer && SEX_VALUES.includes(sexAnswer)) {
+      user.biologicalSex = sexAnswer;
+    }
+
     user.onboardingAnswers = onboardingAnswer._id;
     user.onboardingCompleted = true;
     await user.save();
