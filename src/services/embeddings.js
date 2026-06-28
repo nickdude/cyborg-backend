@@ -39,18 +39,37 @@ async function _embed(text, apiKey) {
 
 async function generateEmbedding(text) {
   loadKeys();
-  if (_primaryKey) {
+
+  // Build ordered pool: primary first, then fallbacks starting at round-robin position.
+  // This ensures every call tries the primary cheaply, but distributes fallback load across calls.
+  const pool = [];
+  if (_primaryKey) pool.push(_primaryKey);
+  for (let i = 0; i < _fallbackKeys.length; i++) {
+    pool.push(_fallbackKeys[(_fallbackIndex + i) % _fallbackKeys.length]);
+  }
+
+  let lastKeyError = null;
+
+  for (let i = 0; i < pool.length; i++) {
+    const key = pool[i];
     try {
-      return await _embed(text, _primaryKey);
+      const result = await _embed(text, key);
+      // Advance round-robin when a fallback key succeeds so future calls start from the next one
+      if (_fallbackKeys.length > 0 && (i > 0 || !_primaryKey)) {
+        _fallbackIndex = (_fallbackIndex + 1) % _fallbackKeys.length;
+      }
+      return result;
     } catch (err) {
-      if (isKeyError(err) && _fallbackKeys.length > 0) {
-        console.warn("[Embeddings] Primary key quota/rate error, using fallback");
-      } else throw err;
+      if (!isKeyError(err)) throw err; // non-key error (bad input etc.) — fail fast, don't burn pool
+      lastKeyError = err;
+      const label = (i === 0 && _primaryKey) ? 'primary' : `fallback[${_primaryKey ? i : i + 1}]`;
+      console.warn(`[Embeddings] Key ${label} quota/rate error, trying next`);
     }
   }
-  const key = _fallbackKeys[_fallbackIndex % _fallbackKeys.length];
-  _fallbackIndex++;
-  return await _embed(text, key);
+
+  throw new Error(
+    `[Embeddings] All ${pool.length} API key(s) exhausted. Last error: ${lastKeyError?.message}`
+  );
 }
 
 module.exports = { generateEmbedding };

@@ -73,7 +73,11 @@ Please correct it and return ONLY a valid JSON array matching the schema above. 
 // ─── AI Call ────────────────────────────────────────────────────────────────
 
 async function callAI(systemPrompt, userPrompt) {
-  return generateText({ systemPrompt, userPrompt })
+  // Explicit ceiling (mirrors actionPlanProtocol). generateText defaults
+  // maxTokens=4096 and now always forwards it to Gemini, so without this the
+  // comprehensive multi-goal JSON would silently truncate and trailing goals
+  // would be dropped by the JSON-repair logic.
+  return generateText({ systemPrompt, userPrompt, maxTokens: 16384 })
 }
 
 // ─── JSON Extraction ────────────────────────────────────────────────────────

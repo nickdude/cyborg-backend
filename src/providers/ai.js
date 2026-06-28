@@ -14,6 +14,7 @@
 
 const Anthropic = require("@anthropic-ai/sdk").default || require("@anthropic-ai/sdk");
 const { GoogleGenerativeAI, FunctionCallingMode } = require("@google/generative-ai");
+const { narrateStart, narrateEnd } = require("../services/toolNarration");
 
 // --- Provider detection (lazy -- env may not be loaded at import time) -------
 
@@ -46,8 +47,14 @@ function loadGeminiKeys() {
     const key = process.env[`GEMINI_API_KEY_${i}`];
     if (key) _fallbackGeminiKeys.push(key);
   }
-  const total = (_primaryGeminiKey ? 1 : 0) + _fallbackGeminiKeys.length;
-  console.log(`[AI] Loaded ${total} Gemini API keys (1 primary, ${_fallbackGeminiKeys.length} fallback)`);
+  const hadExplicitPrimary = !!_primaryGeminiKey;
+  // If no explicit primary is set, promote the first pool key so primary
+  // lookups don't return null (which would crash getGeminiClient).
+  if (!_primaryGeminiKey && _fallbackGeminiKeys.length > 0) {
+    _primaryGeminiKey = _fallbackGeminiKeys[0];
+  }
+  const total = (hadExplicitPrimary ? 1 : 0) + _fallbackGeminiKeys.length;
+  console.log(`[AI] Loaded ${total} Gemini API keys (${hadExplicitPrimary ? "explicit" : "promoted"} primary, ${_fallbackGeminiKeys.length} fallback)`);
 }
 
 function getPrimaryGeminiKey() {
@@ -147,7 +154,7 @@ function sanitizeSchemaForGemini(schema) {
  * @param {Function} opts.executeTool   - async (name, input) => result
  * @param {Function} opts.emit          - SSE emitter (data) => void
  * @param {boolean}  opts.enableThinking
- * @param {number}   opts.thinkingBudget
+ * @param {Function} opts.isAborted     - () => boolean; when true, stop the loop (client gone)
  * @returns {{ text, toolUses, thinking }}
  */
 async function streamChat(opts) {
@@ -160,8 +167,11 @@ async function streamChat(opts) {
 
 async function streamChatClaude({
   messages, systemPrompt, tools, executeTool, emit,
-  enableThinking = false, thinkingBudget = 8000,
+  enableThinking = false, persona = "concierge", isAborted = () => false,
 }) {
+  // NOTE: `thinkingBudget` was removed from this destructure after the
+  // adaptive-thinking migration (effort, not budget). Callers may still pass
+  // it harmlessly; it is simply ignored.
   const anthropic = getAnthropicClient();
   const model = getModelName();
   let currentMessages = [...messages];
@@ -176,6 +186,13 @@ async function streamChatClaude({
   const MAX_TOOL_CALLS = parseInt(process.env.MAX_TOOL_CALLS || "25", 10);
 
   while (true) {
+    // Light cancellation: if the client is gone (disconnect / controller
+    // timeout), stop before doing more work or executing more tools. The
+    // connection is dead, so emit nothing further.
+    if (isAborted()) {
+      console.warn("[Claude] client aborted; stopping loop without further emits");
+      return { text: "", toolUses: allToolUses, thinkingMap: Object.keys(thinkingMap).length ? thinkingMap : null };
+    }
     iteration++;
     if (iteration > MAX_ITERATIONS) {
       console.warn(`[Claude] iteration cap (${MAX_ITERATIONS}) reached; aborting loop`);
@@ -197,16 +214,16 @@ async function streamChatClaude({
     try {
       const baseParams = {
         model,
-        max_tokens: thinkingEnabled ? Math.max(16000, thinkingBudget + 4096) : 4096,
+        max_tokens: thinkingEnabled ? 16000 : 4096,
         system: systemPrompt,
         tools,
         messages: currentMessages,
       };
 
       const stream = thinkingEnabled
-        ? anthropic.beta.messages.stream({
-            betas: ["interleaved-thinking-2025-05-14"],
-            thinking: { type: "enabled", budget_tokens: thinkingBudget },
+        ? anthropic.messages.stream({
+            thinking: { type: "adaptive", display: "summarized" },
+            output_config: { effort: process.env.THINKING_EFFORT || "high" },
             ...baseParams,
           })
         : anthropic.messages.stream(baseParams);
@@ -227,6 +244,10 @@ async function streamChatClaude({
       const finalMsg = await stream.finalMessage();
       console.log(`[Claude] <- response #${iteration} | stop_reason: ${finalMsg.stop_reason} | in: ${finalMsg.usage?.input_tokens} | out: ${finalMsg.usage?.output_tokens}`);
 
+      if (finalMsg.stop_reason === "max_tokens") {
+        console.warn(`[Claude] response #${iteration} hit max_tokens cap (out: ${finalMsg.usage?.output_tokens}); assistant text may be truncated`);
+      }
+
       const hasThinking = Object.keys(thinkingMap).length > 0;
 
       if (finalMsg.stop_reason === "end_turn") {
@@ -238,11 +259,18 @@ async function streamChatClaude({
         const toolUseBlocks = finalMsg.content.filter((b) => b.type === "tool_use");
         const toolResults = [];
 
-        for (const toolUse of toolUseBlocks) {
-          emit({ type: "toolStart", name: toolUse.name, input: toolUse.input });
+        // segmentIndex (above) = toolCallCount - 1: the reasoning segment that produced THIS batch.
+        for (let bi = 0; bi < toolUseBlocks.length; bi++) {
+          const toolUse = toolUseBlocks[bi];
+          const toolIndex = toolCallCount + bi;            // unique per tool
+          const startLine = narrateStart(toolUse.name, toolUse.input, persona);
+          emit({ type: "narration", phase: "start", name: toolUse.name, toolIndex, segmentIndex, text: startLine });
+          emit({ type: "toolStart", name: toolUse.name, input: toolUse.input, toolIndex });
           const result = await executeTool(toolUse.name, toolUse.input);
-          emit({ type: "toolEnd", name: toolUse.name, ok: !result.error, result });
-          allToolUses.push({ name: toolUse.name, input: toolUse.input, result });
+          emit({ type: "toolEnd", name: toolUse.name, ok: !result.error, result, toolIndex });
+          const endLine = narrateEnd(toolUse.name, result);
+          if (endLine) emit({ type: "narration", phase: "end", name: toolUse.name, toolIndex, text: endLine });
+          allToolUses.push({ name: toolUse.name, input: toolUse.input, result, toolIndex, segmentIndex, narration: { start: startLine, end: endLine } });
           toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: JSON.stringify(result) });
         }
 
@@ -266,7 +294,7 @@ async function streamChatClaude({
       const status = err?.status || err?.statusCode;
 
       // Thinking unsupported -- disable and retry same turn
-      if (thinkingEnabled && status === 400 && (msg.includes("thinking") || msg.includes("budget_tokens") || msg.includes("interleaved"))) {
+      if (thinkingEnabled && status === 400 && (msg.includes("thinking") || msg.includes("budget_tokens") || msg.includes("interleaved") || msg.includes("adaptive") || msg.includes("effort") || msg.includes("output_config"))) {
         console.warn(`[Claude] Extended thinking not supported by model "${model}", falling back`);
         thinkingEnabled = false;
         emit({ type: "thinkingUnsupported" });
@@ -278,6 +306,12 @@ async function streamChatClaude({
       if (isOverloadedError(err) && overloadRetries < OVERLOAD_DELAYS_MS.length) {
         const delay = OVERLOAD_DELAYS_MS[overloadRetries];
         console.warn(`[Claude] Overloaded -- retry ${overloadRetries + 1}/${OVERLOAD_DELAYS_MS.length} in ${delay}ms`);
+        // Reset any partial thinking captured during the failed attempt so the
+        // retry re-fills THIS segment cleanly instead of appending to it
+        // (which would duplicate the reasoning). Overload-retry path only.
+        // Guarded so we never create a phantom empty segment on the
+        // non-thinking path (which would flip hasThinking true).
+        if (thinkingMap[segmentIndex]) thinkingMap[segmentIndex] = "";
         await sleep(delay);
         overloadRetries++;
         iteration--;  // don't count this as a new logical turn
@@ -292,21 +326,29 @@ async function streamChatClaude({
 // -- Gemini implementation ---------------------------------------------------
 
 async function streamChatGemini({
-  messages, systemPrompt, tools, executeTool, emit,
+  messages, systemPrompt, tools, executeTool, emit, persona = "concierge",
+  isAborted = () => false,
 }) {
   try {
-    return await _streamChatGemini({ messages, systemPrompt, tools, executeTool, emit, useFallback: false });
+    return await _streamChatGemini({ messages, systemPrompt, tools, executeTool, emit, persona, isAborted, useFallback: false });
   } catch (err) {
-    if (isGeminiKeyError(err)) {
-      console.warn("[Gemini Chat] Primary key quota/rate error, retrying with fallback key");
-      return await _streamChatGemini({ messages, systemPrompt, tools, executeTool, emit, useFallback: true });
+    // Only fall back to a different key when NO tool has executed yet. Once a
+    // tool has run, re-running the whole loop on a fresh key would re-execute
+    // those tools (side effects) and re-emit toolStart/narration with
+    // toolIndex restarting at 0, corrupting the frontend step model (#3).
+    // In that case we surface the error instead of silently restarting.
+    // `err.toolsExecuted` is set inside _streamChatGemini on key errors.
+    if (isGeminiKeyError(err) && !err.toolsExecuted) {
+      console.warn("[Gemini Chat] Key quota/rate error before any tool ran; retrying with fallback key");
+      return await _streamChatGemini({ messages, systemPrompt, tools, executeTool, emit, persona, isAborted, useFallback: true });
     }
     throw err;
   }
 }
 
 async function _streamChatGemini({
-  messages, systemPrompt, tools, executeTool, emit, useFallback = false,
+  messages, systemPrompt, tools, executeTool, emit, persona = "concierge",
+  useFallback = false, isAborted = () => false,
 }) {
   const genAI = getGeminiClient(useFallback);
   const model = getModelName();
@@ -348,8 +390,15 @@ async function _streamChatGemini({
 
   // Agentic loop -- keep calling until no more tool calls
   let currentInput = userText;
+  let toolStep = 0;
 
   while (true) {
+    // Light cancellation: stop before doing more work / executing more tools
+    // once the client is gone (disconnect / controller timeout).
+    if (isAborted()) {
+      console.warn("[Gemini] client aborted; stopping loop without further emits");
+      return { text: "", toolUses: allToolUses, thinkingMap: null };
+    }
     iteration++;
     if (iteration > MAX_ITERATIONS) {
       console.warn(`[Gemini] iteration cap (${MAX_ITERATIONS}) reached; aborting loop`);
@@ -363,22 +412,29 @@ async function _streamChatGemini({
     }
     console.log(`[Gemini] -> request #${iteration} | model: ${model} | messages: ${messages.length}`);
 
-    const result = await chat.sendMessageStream(currentInput);
-
     let accText = "";
     let pendingFunctionCalls = [];
 
-    for await (const chunk of result.stream) {
-      const parts = chunk.candidates?.[0]?.content?.parts || [];
-      for (const part of parts) {
-        if (part.text) {
-          accText += part.text;
-          emit({ type: "textDelta", text: part.text });
-        }
-        if (part.functionCall) {
-          pendingFunctionCalls.push(part.functionCall);
+    try {
+      const result = await chat.sendMessageStream(currentInput);
+      for await (const chunk of result.stream) {
+        const parts = chunk.candidates?.[0]?.content?.parts || [];
+        for (const part of parts) {
+          if (part.text) {
+            accText += part.text;
+            emit({ type: "textDelta", text: part.text });
+          }
+          if (part.functionCall) {
+            pendingFunctionCalls.push(part.functionCall);
+          }
         }
       }
+    } catch (err) {
+      // Tag key/quota errors with whether any tool has already executed, so
+      // streamChatGemini only rotates keys when it's safe to restart the loop
+      // (no side effects + no emitted toolIndex yet). See #3.
+      if (isGeminiKeyError(err)) err.toolsExecuted = allToolUses.length > 0;
+      throw err;
     }
 
     // If no function calls, we're done
@@ -390,15 +446,20 @@ async function _streamChatGemini({
     // Execute tool calls
     const functionResponses = [];
     for (const fc of pendingFunctionCalls) {
+      const toolIndex = toolStep++;
       console.log(`[Gemini] tool_call: ${fc.name} | input: ${JSON.stringify(fc.args)}`);
-      emit({ type: "toolStart", name: fc.name, input: fc.args });
+      const startLine = narrateStart(fc.name, fc.args, persona);
+      emit({ type: "narration", phase: "start", name: fc.name, toolIndex, segmentIndex: -1, text: startLine });
+      emit({ type: "toolStart", name: fc.name, input: fc.args, toolIndex });
 
       const result = await executeTool(fc.name, fc.args || {});
 
       console.log(`[Gemini] tool_result: ${fc.name} | ok: ${!result.error}`);
-      emit({ type: "toolEnd", name: fc.name, ok: !result.error, result });
+      emit({ type: "toolEnd", name: fc.name, ok: !result.error, result, toolIndex });
+      const endLine = narrateEnd(fc.name, result);
+      if (endLine) emit({ type: "narration", phase: "end", name: fc.name, toolIndex, text: endLine });
 
-      allToolUses.push({ name: fc.name, input: fc.args, result });
+      allToolUses.push({ name: fc.name, input: fc.args, result, toolIndex, segmentIndex: -1, narration: { start: startLine, end: endLine } });
       functionResponses.push({
         functionResponse: {
           name: fc.name,
@@ -549,17 +610,30 @@ async function _parseVisionGemini({ buffer, mimeType, filename, systemPrompt, us
  * @param {string} opts.systemPrompt - System prompt
  * @param {string} opts.userPrompt - User message
  * @param {number} [opts.maxTokens=4096] - Max output tokens
+ * @param {number} [opts.temperature] - Sampling temperature (0-1). When omitted,
+ *   the provider's default temperature is used (unchanged legacy behavior).
  * @returns {Promise<string>} The generated text
  */
-async function generateText({ systemPrompt, userPrompt, maxTokens = 4096 }) {
+async function generateText({ systemPrompt, userPrompt, maxTokens = 4096, temperature }) {
   const provider = getProvider();
   const model = getModelName();
 
   if (provider === "gemini") {
     const runGeminiText = async (useFallback) => {
       const genAI = getGeminiClient(useFallback);
-      const genModel = genAI.getGenerativeModel({ model, systemInstruction: systemPrompt });
-      console.log(`[Gemini Text] -> model: ${model} | fallback: ${useFallback}`);
+      const genModel = genAI.getGenerativeModel({
+        model,
+        systemInstruction: systemPrompt,
+        // Always cap output length (mirrors the Claude branch's max_tokens) so
+        // action-plan JSON generations don't silently truncate. Merge in
+        // temperature only when provided, so existing callers keep the
+        // provider default sampling temperature.
+        generationConfig: {
+          maxOutputTokens: maxTokens,
+          ...(temperature !== undefined && { temperature }),
+        },
+      });
+      console.log(`[Gemini Text] -> model: ${model} | fallback: ${useFallback} | temp: ${temperature ?? "default"}`);
       const result = await genModel.generateContent(userPrompt);
       const text = result.response.text();
       const usage = result.response.usageMetadata || {};
@@ -579,12 +653,15 @@ async function generateText({ systemPrompt, userPrompt, maxTokens = 4096 }) {
 
   // Claude
   const anthropic = getAnthropicClient();
-  console.log(`[Claude Text] -> model: ${model}`);
+  console.log(`[Claude Text] -> model: ${model} | temp: ${temperature ?? "default"}`);
 
   const response = await anthropic.messages.create({
     model,
     max_tokens: maxTokens,
     system: systemPrompt,
+    // Only pass temperature when provided, so existing callers keep the
+    // provider default.
+    ...(temperature !== undefined && { temperature }),
     messages: [{ role: "user", content: userPrompt }],
   });
 

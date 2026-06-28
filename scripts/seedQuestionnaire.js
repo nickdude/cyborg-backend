@@ -311,12 +311,32 @@ const QUESTIONARY_DATA = [
   },
 ];
 
+// The frontend onboarding expects `questionary` to be an ARRAY of sections,
+// each with a `questions` array whose items use `code`/`title`/`type`. An older
+// seed wrote a legacy shape ({ version, sections:[{ id, label, type:"select" }] }),
+// which makes the onboarding page render blank. Detect that and re-seed.
+const isValidShape = (q) =>
+  Array.isArray(q) &&
+  q.length > 0 &&
+  Array.isArray(q[0]?.questions) &&
+  typeof q[0].questions?.[0]?.code === "string";
+
 const seedQuestionnaire = async () => {
   try {
     const existing = await Questionnaire.findOne();
 
-    if (existing) {
+    if (existing && isValidShape(existing.questionary)) {
       console.log("✓ Questionnaire already seeded");
+      return;
+    }
+
+    if (existing) {
+      // Legacy/incompatible schema in DB — overwrite with the current shape.
+      await Questionnaire.updateOne(
+        { _id: existing._id },
+        { $set: { questionary: QUESTIONARY_DATA } }
+      );
+      console.log("✓ Questionnaire re-seeded (replaced legacy schema)");
       return;
     }
 

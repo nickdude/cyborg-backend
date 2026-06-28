@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const ChatSummary = require("../models/ChatSummary");
 const { generateEmbedding } = require("../services/embeddings");
 
@@ -33,9 +34,10 @@ async function execute(input, userId, chatId) {
           index: 'chatSummaryVector',
           path: 'embedding',
           queryVector: embedding,
-          numCandidates: 20,
+          // Atlas recommends numCandidates >> limit; use ~15x for reliable recall
+          numCandidates: Math.max(100, limit * 15),
           limit,
-          filter: { userId: { $oid: userId.toString() } },
+          filter: { userId: new mongoose.Types.ObjectId(userId.toString()) },
         },
       },
       {
@@ -60,7 +62,9 @@ async function execute(input, userId, chatId) {
           keyTopics: r.keyTopics,
           date: r.chatDate,
           messageCount: r.messageCount,
+          // vectorSearchScore is already in [0, 1]
           relevanceScore: Math.round((r.score ?? 0) * 100) / 100,
+          match: 'semantic',
         })),
         resultCount: results.length,
       };
@@ -95,7 +99,11 @@ async function execute(input, userId, chatId) {
       keyTopics: s.keyTopics,
       date: s.chatDate,
       messageCount: s.messageCount,
-      relevanceScore: s.score,
+      // Normalize raw hit-count to [0, 1] so scores are comparable to the semantic tier
+      relevanceScore: queryTokens.length > 0
+        ? Math.min(Math.round((s.score / queryTokens.length) * 100) / 100, 1)
+        : 0,
+      match: 'keyword',
     })),
     result_count: scored.length,
   };

@@ -66,25 +66,33 @@ function sanitizeForModel(obj, seen = new WeakSet()) {
  * All tools in Backend A use signature: execute(input, userId, chatId)
  */
 async function executeToolByName(name, input, patientId, chatId) {
-  switch (name) {
-    case "webSearch":
-      return webSearchExec(input, patientId, chatId);
-    case "getMedicalData":
-      return getMedicalDataExec(input, patientId, chatId);
-    case "suggestMedication":
-      return suggestMedicationExec(input, patientId, chatId);
-    case "searchMedicalEvidence":
-      return searchMedicalEvidenceExec(input, patientId, chatId);
-    case "getSchemaInfo":
-      return getSchemaInfoExec(input, patientId, chatId);
-    case "searchChatHistory":
-      return searchChatHistoryExec(input, patientId, chatId);
-    case "fetchFullChat":
-      return fetchFullChatExec(input, patientId, chatId);
-    case "getWearableData":
-      return getWearableDataExec(input, patientId, chatId);
-    default:
-      return { error: `Unknown tool: ${name}` };
+  try {
+    switch (name) {
+      case "webSearch":
+        return await webSearchExec(input, patientId, chatId);
+      case "getMedicalData":
+        return await getMedicalDataExec(input, patientId, chatId);
+      case "suggestMedication":
+        return await suggestMedicationExec(input, patientId, chatId);
+      case "searchMedicalEvidence":
+        return await searchMedicalEvidenceExec(input, patientId, chatId);
+      case "getSchemaInfo":
+        return await getSchemaInfoExec(input, patientId, chatId);
+      case "searchChatHistory":
+        return await searchChatHistoryExec(input, patientId, chatId);
+      case "fetchFullChat":
+        return await fetchFullChatExec(input, patientId, chatId);
+      case "getWearableData":
+        return await getWearableDataExec(input, patientId, chatId);
+      default:
+        return { error: `Unknown tool: ${name}` };
+    }
+  } catch (err) {
+    // Tool failures (invalid AI-supplied ids, DB errors, etc.) must not abort
+    // the whole SSE turn. Return the same { error } shape tools already use so
+    // the model can recover and the turn still completes/saves.
+    console.error(`[doctor][tool:${name}] execution error:`, err.message);
+    return { error: err.message };
   }
 }
 
@@ -95,7 +103,7 @@ async function getPatientContext(patientId) {
   try {
     const [user, coreFacts] = await Promise.all([
       User.findById(patientId)
-        .select("firstName onboardingCompleted onboardingData bloodReport")
+        .select("firstName onboardingCompleted onboardingData bloodReport bloodReports")
         .lean(),
       CoreFact.find({ userId: patientId }).sort({ importance: 1 }).limit(30).lean(),
     ]);
@@ -104,7 +112,7 @@ async function getPatientContext(patientId) {
       firstName: user.firstName,
       onboardingCompleted: user.onboardingCompleted,
       onboardingData: user.onboardingData || {},
-      hasReport: !!user.bloodReport,
+      hasReport: !!user.bloodReport || (Array.isArray(user.bloodReports) && user.bloodReports.length > 0),
       coreFacts,
     };
   } catch (err) {
@@ -249,6 +257,14 @@ const getPatient = async (req, res, next) => {
   try {
     const { patientId } = req.params;
 
+    // SECURITY (IDOR): a doctor may only read patients linked to them. Any
+    // ownership failure returns 403 without leaking whether the patient exists.
+    try {
+      await verifyDoctorOwnership(req.user.id, patientId);
+    } catch (ownershipErr) {
+      return res.sendError("Not authorized for this patient", 403);
+    }
+
     const [patient, coreFacts, latestReport, goals] = await Promise.all([
       User.findById(patientId)
         .select("firstName lastName email phone dateOfBirth biologicalSex onboardingCompleted onboardingData bloodReport bloodReports")
@@ -314,9 +330,15 @@ const createDoctorChat = async (req, res, next) => {
       return res.sendError("patientId is required", 400);
     }
 
-    const patient = await User.findById(patientId).select("firstName lastName").lean();
-    if (!patient) {
-      return res.sendError("Patient not found", 404);
+    // SECURITY (IDOR): a doctor may only create chats for patients linked to
+    // them. verifyDoctorOwnership returns the patient (firstName/lastName used
+    // for the title) or throws; any failure returns 403 without leaking
+    // whether the patient exists.
+    let patient;
+    try {
+      patient = await verifyDoctorOwnership(req.user.id, patientId);
+    } catch (ownershipErr) {
+      return res.sendError("Not authorized for this patient", 403);
     }
 
     const chat = await Chat.create({
@@ -381,6 +403,16 @@ const sendDoctorMessage = async (req, res, next) => {
 
     const patientId = chat.patientId.toString();
 
+    // SECURITY (IDOR / defense-in-depth): ensure the patient is still linked to
+    // this doctor before streaming or running any AI tools against their PHI.
+    // Performed before SSE headers are sent so we can return a clean 403, and
+    // without leaking whether the patient exists.
+    try {
+      await verifyDoctorOwnership(req.user.id, patientId);
+    } catch (ownershipErr) {
+      return res.sendError("Not authorized for this patient", 403);
+    }
+
     // Save user message immediately so it's not lost if AI fails
     chat.messages.push({ role: "user", content: message });
     await chat.save();
@@ -400,13 +432,27 @@ const sendDoctorMessage = async (req, res, next) => {
     res.flushHeaders();
 
     const emit = (data) => {
-      if (!res.writableEnded) {
+      if (res.writableEnded || res.destroyed || !res.writable) return;
+      try {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
+      } catch (err) {
+        // Client disconnected — swallow so the agentic loop continues
+        // and the final chat.save() still runs.
       }
     };
 
     try {
-      const { text, toolUses, thinkingMap } = await streamChat({
+      // Wall-clock timeout so a stuck turn can't hang the SSE connection
+      // forever. Mirrors the patient handler (chatController.sendMessage).
+      const CHAT_TIMEOUT_MS = parseInt(process.env.CHAT_TIMEOUT_MS || "180000", 10);
+      let timeoutHandle;
+      const timeoutPromise = new Promise((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error("chat_timeout")),
+          CHAT_TIMEOUT_MS
+        );
+      });
+      const streamPromise = streamChat({
         messages: claudeMessages,
         systemPrompt: buildDoctorSystemPrompt(patientContext),
         tools: TOOLS,
@@ -415,9 +461,17 @@ const sendDoctorMessage = async (req, res, next) => {
           return sanitizeForModel(result);
         },
         emit,
+        persona: "doctor",
         enableThinking: isThinkingEnabled() && getProvider() === "claude",
         thinkingBudget: getThinkingBudget(),
+        // Stop the agent loop if the client disconnects or the wall-clock
+        // timeout ends the response — avoids running tools nobody will see.
+        isAborted: () => res.writableEnded || res.destroyed,
       });
+      const { text, toolUses, thinkingMap } = await Promise.race([
+        streamPromise,
+        timeoutPromise,
+      ]).finally(() => clearTimeout(timeoutHandle));
 
       console.log(`[doctor][${getProvider()}] Stream complete | model: ${getModelName()}`);
 
@@ -434,7 +488,14 @@ const sendDoctorMessage = async (req, res, next) => {
         .catch((err) => console.error("[doctor][PostProcess] Unhandled error:", err.message));
     } catch (err) {
       console.error("[doctor][SSE] Stream error:", err);
-      emit({ type: "error", message: "Something went wrong. Please try again." });
+      if (err?.message === "chat_timeout") {
+        emit({
+          type: "error",
+          message: "The assistant took too long to respond. Please try a simpler question.",
+        });
+      } else {
+        emit({ type: "error", message: "Something went wrong. Please try again." });
+      }
     } finally {
       if (!res.writableEnded) res.end();
     }

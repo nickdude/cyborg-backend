@@ -23,8 +23,10 @@ memorySchema.index({ userId: 1, category: 1, isActive: 1 });
 memorySchema.index({ userId: 1, tags: 1 });
 memorySchema.index({ userId: 1, createdAt: -1 });
 
-// TTL index for auto-expiring memories
-memorySchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, partialFilterExpression: { expiresAt: { $ne: null } } });
+// TTL index for auto-expiring memories.
+// Partial filter only indexes docs where expiresAt is an actual Date, so non-expiring
+// memories (expiresAt: null) are never deleted. ($ne is NOT allowed in partial filters.)
+memorySchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0, partialFilterExpression: { expiresAt: { $type: 'date' } } });
 
 // Lowercase tags before save
 memorySchema.pre('save', function () {
