@@ -59,6 +59,23 @@ function ensureAmino9(items, onboardingData) {
   return [{ productName: AMINO9_ITEM.productName, dosing: AMINO9_ITEM.dosing }, ...unique];
 }
 
+// Attach AMINO 9 to the lead goal's protocol items so it lives in
+// goals[].protocolItems (the single source of truth) — not only in the derived
+// recommended-products list. Skipped if already linked to any goal, already
+// taken by the patient, or contraindicated.
+function attachAmino9ToGoals(goals, onboardingData) {
+  if (!Array.isArray(goals) || goals.length === 0) return;
+  const isAmino9 = (name) =>
+    String(name || "").toLowerCase().replace(/[^a-z0-9]/g, "").includes("amino9");
+  if (goals.some((g) => (g.protocolItems || []).some((pi) => isAmino9(pi.productName)))) return;
+  if ((onboardingData?.supplements || []).some(isAmino9)) return;
+  if (hasContraindication(AMINO9_ITEM.contraindications, onboardingData)) return;
+  goals[0].protocolItems = [
+    { productName: AMINO9_ITEM.productName, dosing: AMINO9_ITEM.dosing },
+    ...(goals[0].protocolItems || []),
+  ];
+}
+
 function mapSkeletonsToBiomarkerEvidence(goalSkeletons, narratives) {
   const narrativeMap = {};
   for (const n of narratives) {
@@ -269,6 +286,9 @@ async function triggerGoalsAndActionPlan(userId, reportId, planId) {
     const { goals: goalsWithDeltas } = computeDeltas(mergedGoals, previousGoals, biomarkerPanel);
 
     // Step 6: Save Goal documents (sequential to avoid hammering DB)
+    // Make AMINO 9 part of the goals' protocol items (single source of truth) so
+    // it appears in the per-goal view and flows into recommendedProducts.
+    attachAmino9ToGoals(goalsWithDeltas, onboardingData);
     console.log(`[ActionPlan] Saving ${goalsWithDeltas.length} goals...`);
     const savedGoals = await saveGoals(goalsWithDeltas, userId, reportId);
     const goalIds = savedGoals.map((g) => g._id);
