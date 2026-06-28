@@ -97,22 +97,30 @@ async function execute(input, userId, chatId) {
       }
 
       if (input.include.includes('onboarding')) {
-        // Try onboardingData first (new format — keyed by field id like "name", "sex")
+        // Source the questionnaire answers: new onboardingData format first
+        // (keyed by field id like "sex"), then the numeric-keyed OnboardingAnswer
+        // doc (mapped to readable labels).
+        let ob = {};
         if (user.onboardingData && Object.keys(user.onboardingData).length > 0) {
-          result.onboarding = user.onboardingData;
-
-        // Fall back to onboardingAnswers ref (old format — numeric keys like "1.2")
+          ob = { ...user.onboardingData };
         } else if (user.onboardingAnswers) {
           const oa = await mongoose.connection.db
             .collection('onboardinganswers')
             .findOne({ _id: new mongoose.Types.ObjectId(user.onboardingAnswers) });
-          result.onboarding = oa
-            ? { ...mapAnswerKeys(oa.answers), _questionsVersion: oa.questionsVersion }
-            : {};
-
-        } else {
-          result.onboarding = {};
+          if (oa) ob = { ...mapAnswerKeys(oa.answers), _questionsVersion: oa.questionsVersion };
         }
+
+        // Sync the canonical profile fields into onboarding so the AI always has
+        // the key facts even when the questionnaire answers are sparse or empty
+        // (profile <-> onboarding stay consistent). Only fill what's missing.
+        if (ob.biological_sex == null && user.biologicalSex) ob.biological_sex = user.biologicalSex;
+        if (ob.gender == null && user.gender) ob.gender = user.gender;
+        if (ob.age == null && user.dateOfBirth) {
+          const age = Math.floor((Date.now() - new Date(user.dateOfBirth).getTime()) / (365.25 * 24 * 60 * 60 * 1000));
+          if (age >= 0 && age < 150) ob.age = age;
+        }
+
+        result.onboarding = ob;
       }
     }
   }
