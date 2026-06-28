@@ -32,14 +32,31 @@ const AMINO9_ITEM = {
 
 function ensureAmino9(items, onboardingData) {
   // Normalized name match — tolerant of spelling ("AMINO 9" vs "AMINO9 (Essential Amino Acids)").
-  const isAmino9 = (name) =>
-    String(name || "").toLowerCase().replace(/[^a-z0-9]/g, "").includes("amino9");
-  // Already recommended in this protocol, or already taken by the patient → don't duplicate.
-  if (items.some((it) => isAmino9(it.productName))) return items;
-  if ((onboardingData?.supplements || []).some(isAmino9)) return items;
-  // Honor the contraindication safety gate the template pipeline uses.
-  if (hasContraindication(AMINO9_ITEM.contraindications, onboardingData)) return items;
-  return [...items, { productName: AMINO9_ITEM.productName, dosing: AMINO9_ITEM.dosing }];
+  const norm = (name) => String(name || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+  const isAmino9 = (name) => norm(name).includes("amino9");
+
+  // Dedupe by product name — the same supplement linked to multiple goals must
+  // appear only once in the recommended-products list.
+  const seen = new Set();
+  const unique = [];
+  for (const it of items || []) {
+    const key = norm(it.productName);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(it);
+  }
+
+  // AMINO 9 is foundational — float it to the TOP if already present.
+  const idx = unique.findIndex((it) => isAmino9(it.productName));
+  if (idx >= 0) {
+    const [a] = unique.splice(idx, 1);
+    unique.unshift(a);
+    return unique;
+  }
+  // Otherwise add it at the front, unless the patient already takes it or it's contraindicated.
+  if ((onboardingData?.supplements || []).some(isAmino9)) return unique;
+  if (hasContraindication(AMINO9_ITEM.contraindications, onboardingData)) return unique;
+  return [{ productName: AMINO9_ITEM.productName, dosing: AMINO9_ITEM.dosing }, ...unique];
 }
 
 function mapSkeletonsToBiomarkerEvidence(goalSkeletons, narratives) {
