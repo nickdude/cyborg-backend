@@ -1,5 +1,9 @@
 const Chat = require("../models/Chat");
 const User = require("../models/User");
+const Subscription = require("../models/Subscription");
+
+// Free (baseline) plan: AI Concierge is capped per day. Paid plans are unlimited.
+const FREE_CONCIERGE_DAILY_LIMIT = 6;
 const CoreFact = require("../models/CoreFact");
 const { buildSystemPrompt } = require("../prompts/chat");
 const { buildContextMessages } = require("../utils/context");
@@ -218,6 +222,31 @@ const sendMessage = async (req, res, next) => {
     const chat = await Chat.findOne({ _id: req.params.id, userId });
     if (!chat) {
       return res.sendError("Chat not found", 404);
+    }
+
+    // 1.5 Plan gate — an active (non-expired) membership is required. The free
+    // AMINO9 Baseline plan is capped per day; paid plans (advanced/auto-pilot) are
+    // unlimited. (Free access also self-expires after 1 month via expiryDate.)
+    const sub = await Subscription.findOne({ userId, status: "active" }).sort({ createdAt: -1 });
+    const planActive = sub && (!sub.expiryDate || new Date(sub.expiryDate) > new Date());
+    if (!planActive) {
+      return res.sendError(
+        "An active membership is required to use the AI Concierge. Please choose a plan.",
+        403
+      );
+    }
+    if (sub.planType === "baseline") {
+      const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD (UTC)
+      const cd = sub.conciergeDaily || { date: null, count: 0 };
+      const usedToday = cd.date === today ? cd.count : 0;
+      if (usedToday >= FREE_CONCIERGE_DAILY_LIMIT) {
+        return res.sendError(
+          `You've used all ${FREE_CONCIERGE_DAILY_LIMIT} of today's free AI Concierge messages. Upgrade for unlimited access.`,
+          429
+        );
+      }
+      sub.conciergeDaily = { date: today, count: usedToday + 1 };
+      await sub.save();
     }
 
     // 2. Append user message and save immediately so it's not lost if AI fails

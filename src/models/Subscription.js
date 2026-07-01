@@ -37,6 +37,13 @@ const subscriptionSchema = new mongoose.Schema(
       default: true,
     },
     transactionNotes: String,
+    // Free (baseline) plan only: daily AI-Concierge usage counter. Paid plans are
+    // unlimited so this stays untouched for them. `date` is a YYYY-MM-DD key so the
+    // count auto-resets each day.
+    conciergeDaily: {
+      date: { type: String, default: null },
+      count: { type: Number, default: 0 },
+    },
   },
   {
     timestamps: true,
