@@ -3,6 +3,7 @@ const PDFDocument = require("pdfkit");
 const ActionPlan = require("../models/ActionPlan");
 const ReportData = require("../models/ReportData");
 const User = require("../models/User");
+const ProtocolAdherence = require("../models/ProtocolAdherence");
 const { deduplicateProtocol } = require("../utils/protocolDedup");
 
 const GOAL_FIELDS = "goalId title priority healthImpact category description whatThisMeans potentialCauses recommendedActions biomarkerEvidence protocolItems delta recoveryTimeWeeks status achievementCriteria";
@@ -741,4 +742,43 @@ const exportPlanPDF = async (req, res, next) => {
   }
 };
 
-module.exports = { createPlan, getPlan, getLatestPlan, retryPlan, exportPlanPDF };
+/**
+ * Daily protocol adherence — which "Today's plan" items the user has marked as
+ * taken on a given day. Date is the user's local "YYYY-MM-DD" (sent by the client).
+ */
+function normalizeDate(d) {
+  const s = String(d || "").slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : new Date().toISOString().slice(0, 10);
+}
+
+const getAdherence = async (req, res, next) => {
+  try {
+    const date = normalizeDate(req.query.date);
+    const doc = await ProtocolAdherence.findOne({ userId: req.user.id, date }).lean();
+    res.sendSuccess({ date, taken: doc?.taken || [] });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const toggleAdherence = async (req, res, next) => {
+  try {
+    const itemKey = String(req.body?.itemKey || "").trim();
+    if (!itemKey) return res.sendError("itemKey is required", 400);
+    const date = normalizeDate(req.body?.date);
+
+    let doc = await ProtocolAdherence.findOne({ userId: req.user.id, date });
+    if (!doc) doc = new ProtocolAdherence({ userId: req.user.id, date, taken: [] });
+
+    const idx = doc.taken.indexOf(itemKey);
+    if (idx >= 0) doc.taken.splice(idx, 1);
+    else doc.taken.push(itemKey);
+    await doc.save();
+
+    res.sendSuccess({ date, taken: doc.taken });
+  } catch (error) {
+    next(error);
+  }
+};
+
+module.exports = { createPlan, getPlan, getLatestPlan, retryPlan, exportPlanPDF, getAdherence, toggleAdherence };
