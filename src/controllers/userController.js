@@ -1,6 +1,7 @@
 const User = require("../models/User");
 const OnboardingAnswer = require("../models/OnboardingAnswer");
 const ReferralSource = require("../models/ReferralSource");
+const Notification = require("../models/Notification");
 
 // ============== ONBOARDING ==============
 
@@ -223,9 +224,18 @@ const getUserProfile = async (req, res, next) => {
       profileData.referralCode = user.referralCode;
     }
 
-    // Include linked doctor for patients
+    // Include linked doctor for patients (name + code so Settings can show it)
     if (user.userType === "user" && user.linkedDoctor) {
-      profileData.linkedDoctor = user.linkedDoctor;
+      const doc = await User.findById(user.linkedDoctor)
+        .select("firstName lastName email referralCode")
+        .lean();
+      if (doc) {
+        profileData.linkedDoctor = {
+          id: doc._id,
+          name: `${doc.firstName || ""} ${doc.lastName || ""}`.trim() || doc.email,
+          code: doc.referralCode || null,
+        };
+      }
     }
 
     res.sendSuccess(profileData);
@@ -348,6 +358,64 @@ const getAllUsers = async (req, res, next) => {
   }
 };
 
+/**
+ * Patient links (or updates) their doctor via a referral code, post-signup from
+ * Settings. An empty code unlinks. Mirrors the registration-time linking and
+ * notifies the doctor so the patient shows up on their dashboard immediately.
+ */
+const linkDoctor = async (req, res, next) => {
+  try {
+    if (req.user.userType === "doctor") {
+      return res.sendError("Doctors cannot link to a doctor", 400);
+    }
+    const raw = String(req.body?.referralCode || "").trim();
+    const user = await User.findById(req.user.id);
+    if (!user) return res.sendError("User not found", 404);
+
+    // Empty code clears the link.
+    if (!raw) {
+      user.linkedDoctor = null;
+      await user.save();
+      return res.sendSuccess({ linkedDoctor: null }, "Doctor removed");
+    }
+
+    const code = raw.toUpperCase();
+    const doctor = await User.findOne({ referralCode: code, userType: "doctor" });
+    if (!doctor) return res.sendError("No doctor found with that code", 404);
+
+    user.linkedDoctor = doctor._id;
+    await user.save();
+
+    // Notify the doctor that a patient linked via their code.
+    try {
+      await Notification.create({
+        userId: doctor._id,
+        type: "patient:linked",
+        metadata: {
+          patientId: user._id,
+          patientEmail: user.email || user.phone,
+          patientName: user.firstName || user.email || user.phone,
+        },
+      });
+    } catch (_) {
+      /* notification is best-effort */
+    }
+
+    return res.sendSuccess(
+      {
+        linkedDoctor: {
+          id: doctor._id,
+          name: `${doctor.firstName || ""} ${doctor.lastName || ""}`.trim() || doctor.email,
+          code,
+        },
+      },
+      "Doctor linked successfully"
+    );
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   saveOnboardingAnswers,
   getOnboardingAnswers,
@@ -357,4 +425,5 @@ module.exports = {
   getReferralSource,
   markWelcomeSeen,
   getAllUsers,
+  linkDoctor,
 };

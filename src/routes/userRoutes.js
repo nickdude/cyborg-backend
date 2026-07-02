@@ -23,6 +23,9 @@ router.get("/:userId/profile", verifyToken, checkOwnership, userController.getUs
 // Update user profile
 router.put("/:userId/profile", verifyToken, checkOwnership, userController.updateUserProfile);
 
+// Patient links (or updates) their doctor via referral code, post-signup
+router.post("/link-doctor", verifyToken, userController.linkDoctor);
+
 // ============== ONBOARDING ==============
 router.post(
   "/:userId/onboarding",
