@@ -8,6 +8,7 @@ const { detectIssues } = require("../utils/issueDetector");
 const { generateGoals, hasContraindication } = require("../utils/goalGenerator");
 const { generateNarratives } = require("../prompts/goalNarrative");
 const { buildPatientContext } = require("../utils/goalHelpers");
+const { attachCitations } = require("./goalCitations");
 const { computeDeltas } = require("./deltaTracker");
 const { generateProtocol } = require("../prompts/actionPlanProtocol");
 
@@ -126,6 +127,7 @@ function mapSkeletonsToBiomarkerEvidence(goalSkeletons, narratives) {
         dosing: pi.dosing,
         triggerBiomarkers: pi.triggerBiomarkers || [],
       })),
+      symptoms: skeleton.symptoms || [],
       _narrativeMissing: !hasNarrative,
     };
 
@@ -281,6 +283,13 @@ async function triggerGoalsAndActionPlan(userId, reportId, planId) {
 
     // Step 4: Merge skeletons + narratives into full goals with biomarker evidence
     const mergedGoals = mapSkeletonsToBiomarkerEvidence(goalSkeletons, narratives);
+
+    // Step 4b: Attach grounded medical citations per goal (cached by goalId).
+    // Bounded + non-fatal: a slow/hung Perplexity fetch must never block or fail
+    // generation — on timeout we proceed with whatever citations were gathered.
+    await withTimeout(attachCitations(mergedGoals), 90_000, "Citation fetch").catch((err) => {
+      console.error(`[ActionPlan] citations skipped: ${err.message}`);
+    });
 
     // Step 5: Compute deltas vs previous goals
     const { goals: goalsWithDeltas } = computeDeltas(mergedGoals, previousGoals, biomarkerPanel);

@@ -47,16 +47,25 @@ async function querySonar({
         "Content-Type": "application/json",
         "Authorization": `Bearer ${apiKey}`,
       },
+      // Bound the request so a stalled/hung upstream can never wedge a caller
+      // (e.g. the action-plan generation job) indefinitely.
+      timeout: 30_000,
     });
 
     const data = res.data;
     const answer = data.choices?.[0]?.message?.content || "";
     const rawCitations = data.citations || [];
 
+    // Titles live in search_results (citations[] are bare URL strings). Map url→title.
+    const titleByUrl = {};
+    for (const s of (data.search_results || [])) {
+      if (s?.url) titleByUrl[s.url] = s.title || "";
+    }
+
     const citations = rawCitations.map(url => {
       let domain = url;
       try { domain = new URL(url).hostname; } catch {}
-      return { url, domain };
+      return { url, domain, title: titleByUrl[url] || "" };
     });
 
     return { answer, citations };

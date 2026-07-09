@@ -6,7 +6,7 @@ const User = require("../models/User");
 const ProtocolAdherence = require("../models/ProtocolAdherence");
 const { deduplicateProtocol } = require("../utils/protocolDedup");
 
-const GOAL_FIELDS = "goalId title priority healthImpact category description whatThisMeans potentialCauses recommendedActions biomarkerEvidence protocolItems delta recoveryTimeWeeks status achievementCriteria";
+const GOAL_FIELDS = "goalId title priority healthImpact category description whatThisMeans potentialCauses recommendedActions biomarkerEvidence protocolItems delta recoveryTimeWeeks status achievementCriteria symptoms citations";
 
 function isValidObjectId(id) {
   return mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === String(id);
@@ -126,13 +126,13 @@ const getLatestPlan = async (req, res, next) => {
     }
 
     if (!plan) {
-      // Check if there's a plan in review or still generating
+      // Check if there's a plan in review, still generating, or failed.
       let fallbackPlan = await ActionPlan.findOne({
         userId,
-        status: { $in: ["pending_review", "draft", "pending", "generating"] },
+        status: { $in: ["pending_review", "draft", "pending", "generating", "failed"] },
       })
         .sort({ createdAt: -1 })
-        .select("_id status healthReport overview reportId createdAt");
+        .select("_id status healthReport overview reportId createdAt generationAttempts errorMessage");
 
       // Same orphan guard for in-progress / awaiting-review plans.
       if (fallbackPlan && fallbackPlan.reportId && !(await ReportData.exists({ _id: fallbackPlan.reportId, userId }))) {
@@ -141,12 +141,14 @@ const getLatestPlan = async (req, res, next) => {
 
       if (fallbackPlan) {
         const isGenerating = fallbackPlan.status === "pending" || fallbackPlan.status === "generating";
-        const isPendingReview = fallbackPlan.status === "pending_review" || fallbackPlan.status === "draft";
+        const isFailed = fallbackPlan.status === "failed";
 
         return res.sendSuccess(
           {
             _id: fallbackPlan._id,
-            status: isGenerating ? fallbackPlan.status : "awaiting_review",
+            status: isFailed ? "failed" : isGenerating ? fallbackPlan.status : "awaiting_review",
+            errorMessage: isFailed ? fallbackPlan.errorMessage : undefined,
+            generationAttempts: isFailed ? fallbackPlan.generationAttempts : undefined,
             overview: fallbackPlan.overview,
             healthReport: fallbackPlan.healthReport,
             monitoredIssues: [],
@@ -155,9 +157,11 @@ const getLatestPlan = async (req, res, next) => {
             reportId: fallbackPlan.reportId,
             createdAt: fallbackPlan.createdAt,
           },
-          isGenerating
-            ? "Action plan is being generated"
-            : "Action plan is awaiting doctor review"
+          isFailed
+            ? "Action plan generation failed"
+            : isGenerating
+              ? "Action plan is being generated"
+              : "Action plan is awaiting doctor review"
         );
       }
 

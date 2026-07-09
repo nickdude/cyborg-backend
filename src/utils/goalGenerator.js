@@ -128,6 +128,7 @@ function generateGoals(detectedIssues, onboardingData, biomarkerPanel) {
           template,
           contributingIssues: [],
           allBiomarkers: [],
+          allSymptoms: [],
           maxPriorityScore: 0,
           maxPriority: 'Low',
           sumPriority: 0,
@@ -152,6 +153,19 @@ function generateGoals(detectedIssues, onboardingData, biomarkerPanel) {
         }
       }
 
+      // Merge symptoms across contributing issues (dedupe by label, reported wins)
+      const symIndex = new Map(goal.allSymptoms.map(s => [s.label.toLowerCase(), s]))
+      for (const s of (issue.symptoms || [])) {
+        const key = s.label.toLowerCase()
+        const existing = symIndex.get(key)
+        if (!existing) {
+          symIndex.set(key, s)
+          goal.allSymptoms.push(s)
+        } else if (existing.source === 'associated' && s.source === 'reported') {
+          existing.source = 'reported' // upgrade
+        }
+      }
+
       // Track priority
       if (issue.priorityScore > goal.maxPriorityScore) {
         goal.maxPriorityScore = issue.priorityScore
@@ -162,7 +176,7 @@ function generateGoals(detectedIssues, onboardingData, biomarkerPanel) {
   }
 
   // Step 3: Build goal skeletons
-  let goals = Object.values(goalMap).map(({ template, contributingIssues, allBiomarkers, maxPriorityScore, maxPriority, sumPriority, goalAligned }) => {
+  let goals = Object.values(goalMap).map(({ template, contributingIssues, allBiomarkers, allSymptoms, maxPriorityScore, maxPriority, sumPriority, goalAligned }) => {
     // Filter protocol items by contraindications and trigger biomarkers
     const filteredProtocol = (template.protocolItems || [])
       .filter(item => !hasContraindication(item.contraindications, onboardingData))
@@ -192,6 +206,9 @@ function generateGoals(detectedIssues, onboardingData, biomarkerPanel) {
       recoveryTimeWeeks: template.recoveryTimeWeeks,
       biomarkersToImprove: allBiomarkers.slice(0, 8), // cap at 8 most relevant
       protocolItems: filteredProtocol,
+      symptoms: [...allSymptoms]
+        .sort((a, b) => (b.source === 'reported' ? 1 : 0) - (a.source === 'reported' ? 1 : 0))
+        .slice(0, 6),
       contributingIssues: contributingIssues.map(i => i.title),
       goalAligned,
     }

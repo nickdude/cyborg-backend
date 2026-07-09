@@ -50,6 +50,29 @@ const deltaSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// "How you might be feeling" — humanized symptoms sourced from the contributing
+// issue templates. `source` distinguishes what the patient actually reported in
+// onboarding from symptoms clinically associated with the underlying issue.
+const symptomSchema = new mongoose.Schema(
+  {
+    label: { type: String },
+    source: { type: String, enum: ["reported", "associated"], default: "associated" },
+  },
+  { _id: false }
+);
+
+// Grounded medical-literature references for this goal's finding (Perplexity Sonar,
+// restricted to medical domains). Empty when evidence lookup is unavailable.
+const citationSchema = new mongoose.Schema(
+  {
+    title: { type: String, default: "" },
+    url: { type: String },
+    domain: { type: String, default: "" },
+    source: { type: String, default: "" },
+  },
+  { _id: false }
+);
+
 const goalSchema = new mongoose.Schema(
   {
     userId: {
@@ -82,6 +105,8 @@ const goalSchema = new mongoose.Schema(
 
     biomarkerEvidence: [biomarkerEvidenceSchema],
     protocolItems: [protocolItemSchema],
+    symptoms: { type: [symptomSchema], default: [] },
+    citations: { type: [citationSchema], default: [] },
     delta: { type: deltaSchema, default: () => ({ status: "new" }) },
 
     status: {

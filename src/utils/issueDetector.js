@@ -286,6 +286,37 @@ function computeSymptomScore(template, onboarding) {
 }
 
 /**
+ * Sentence-case a raw symptom token for display, e.g. "brain fog" → "Brain fog".
+ */
+function humanizeSymptom(s) {
+  const t = String(s || "").trim()
+  return t ? t.charAt(0).toUpperCase() + t.slice(1) : t
+}
+
+/**
+ * Collect the humanized symptoms associated with an issue template, tagging each
+ * as "reported" when it matches the patient's onboarding symptoms, else "associated".
+ * De-duplicated by label; reported wins over associated.
+ */
+function collectIssueSymptoms(template, onboarding) {
+  const raw = [
+    ...(template.symptomMatches?.perfect || []),
+    ...(template.symptomMatches?.partial || []),
+    ...(template.questionnaireFlags?.symptoms || []),
+  ]
+  const seen = new Map() // lowerLabel → { label, source }
+  for (const s of raw) {
+    const key = String(s).toLowerCase().trim()
+    if (!key) continue
+    const reported = onboarding.symptoms.some(u => u.includes(key) || key.includes(u))
+    if (!seen.has(key) || reported) {
+      seen.set(key, { label: humanizeSymptom(key), source: reported ? "reported" : "associated" })
+    }
+  }
+  return [...seen.values()]
+}
+
+/**
  * Compute severity multiplier from biomarker flags.
  */
 function computeSeverityMultiplier(template, bmLookup) {
@@ -467,6 +498,7 @@ function detectIssues(biomarkerPanel, onboardingData, wearableData) {
       priorityScore,
       priority,
       biomarkers,
+      symptoms: collectIssueSymptoms(template, onboarding),
       relatedGoals: template.relatedGoals,
     })
   }
