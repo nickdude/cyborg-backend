@@ -53,5 +53,16 @@ const subscriptionSchema = new mongoose.Schema(
 // Index for quick user lookups
 subscriptionSchema.index({ userId: 1 });
 subscriptionSchema.index({ status: 1 });
+// One Razorpay payment maps to at most one subscription. Partial (not sparse) so
+// only paid subscriptions are constrained — free/baseline subscriptions have no
+// razorpayPaymentId and are unaffected. Backs the idempotency check in
+// verifyPayment against the concurrent-double-submit race.
+subscriptionSchema.index(
+  { razorpayPaymentId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { razorpayPaymentId: { $type: "string" } },
+  }
+);
 
 module.exports = mongoose.model("Subscription", subscriptionSchema);
