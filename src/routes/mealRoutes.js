@@ -39,6 +39,9 @@ router.get("/:userId/meals/history", mealController.getMealHistory);
 
 router.get("/:userId/meals/summary", mealController.getMealSummary);
 
+// Must stay above /:mealId or "recent-items" is parsed as a meal id.
+router.get("/:userId/meals/recent-items", mealController.getRecentItems);
+
 router.get("/:userId/meals/:mealId", mealController.getMealById);
 
 router.patch("/:userId/meals/:mealId", mealController.updateMeal);

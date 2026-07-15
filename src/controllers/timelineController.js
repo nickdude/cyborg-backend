@@ -44,6 +44,7 @@ const getTimeline = async (req, res, next) => {
       time: m.consumedAt,
       title: m.title,
       data: {
+        mealType: m.mealType || null,
         totals: m.totals,
         items: m.items,
         imageKeys: m.imageKeys,

@@ -49,7 +49,7 @@ const VECTOR_INDEXES = [
 
 // Models registered on the DEFAULT mongoose connection (MONGO_URI).
 const MAIN_MODELS = [
-  "User", "ActionPlan", "Activity", "Chat", "GlucoseReading", "Goal",
+  "User", "ActionPlan", "Activity", "Chat", "FoodItem", "GlucoseReading", "Goal",
   "Meal", "MealScore", "Notification", "OnboardingAnswer", "Questionnaire",
   "ReferralSource", "ReportData", "SchemaInfo", "Subscription", "WearableData",
 ];
