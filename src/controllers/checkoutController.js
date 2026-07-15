@@ -272,6 +272,61 @@ const retryPayment = async (req, res, next) => {
     if (!payment) return res.sendError("Payment record not found", 404);
 
     const gateway = getPaymentGateway(payment.gateway);
+
+    // Idempotency guard against double-charging. The previous attempt's gateway
+    // order may already hold a captured payment — e.g. Razorpay took the money
+    // but our verify call failed, leaving paymentStatus "pending". Starting a
+    // fresh charge here would bill the user a second time, so instead reconcile
+    // the existing capture and confirm the order.
+    if (payment.gatewayOrderId && typeof gateway.fetchOrderPayments === "function") {
+      let captured;
+      try {
+        const gatewayPayments = await gateway.fetchOrderPayments(payment.gatewayOrderId);
+        captured = gatewayPayments.find((p) =>
+          ["captured", "authorized"].includes(p.status)
+        );
+      } catch (e) {
+        // If we can't confirm the capture state, do NOT open a new charge — a
+        // false "not captured" here would double-bill. Ask the user to retry.
+        console.error("[checkout] retry capture-check failed:", e.message);
+        return res.sendError(
+          "Could not confirm payment status. Please try again in a moment.",
+          503
+        );
+      }
+      if (captured) {
+        payment.status = "success";
+        payment.transactionId = captured.id;
+        payment.paymentMethod = captured.method || "";
+        payment.paidAt = new Date();
+        await payment.save();
+        order.paymentStatus = "success";
+        order.orderStatus = "Confirmed";
+        await order.save();
+        await OrderStatusHistory.create({
+          orderId: order._id,
+          status: "Confirmed",
+          note: "Payment reconciled on retry (gateway payment already captured)",
+        });
+        await Cart.updateOne(
+          { userId: req.user.id },
+          { $set: { items: [], discount: 0 } }
+        );
+        await notify(req.user.id, EVENTS.PAYMENT_SUCCESS, {
+          orderId: order._id,
+          orderNumber: order.orderNumber,
+        });
+        await notify(req.user.id, EVENTS.ORDER_CONFIRMED, {
+          orderId: order._id,
+          orderNumber: order.orderNumber,
+        });
+        return res.sendSuccess(
+          { order, alreadyPaid: true },
+          "Payment already received — order confirmed"
+        );
+      }
+    }
+
     const gatewayOrder = await gateway.createOrder({
       amount: order.totalAmount,
       currency: order.currency,
