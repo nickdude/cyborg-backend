@@ -1,6 +1,7 @@
 // Authentication middleware
 
 const jwt = require("jsonwebtoken");
+const User = require("../models/User");
 
 if (!process.env.JWT_SECRET) {
   throw new Error("JWT_SECRET env var is required");
@@ -39,14 +40,28 @@ const checkRole = (allowedRoles) => {
   };
 };
 
-const checkOwnership = (req, res, next) => {
-  const paramUserId = req.params.userId;
-  if (!paramUserId) return next();
-  if (req.user.userType === "doctor") return next();
-  if (String(req.user.id) !== String(paramUserId)) {
+// Allow access to /:userId resources only for the user themselves, or for a
+// doctor who is actually LINKED to that patient. Previously every doctor got a
+// blanket pass on any :userId, letting any doctor (incl. a self-registered one)
+// read and modify any patient's profile/medical data.
+const checkOwnership = async (req, res, next) => {
+  try {
+    const paramUserId = req.params.userId;
+    if (!paramUserId) return next();
+    if (String(req.user.id) === String(paramUserId)) return next();
+
+    if (req.user.userType === "doctor") {
+      const patient = await User.findById(paramUserId)
+        .select("linkedDoctor")
+        .lean();
+      if (patient && String(patient.linkedDoctor) === String(req.user.id)) {
+        return next();
+      }
+    }
     return res.sendError("Forbidden", 403);
+  } catch (err) {
+    next(err);
   }
-  next();
 };
 
 module.exports = { verifyToken, checkRole, checkOwnership };
