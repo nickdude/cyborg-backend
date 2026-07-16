@@ -78,15 +78,15 @@ mealSchema.index({ "items.nameNorm": 1 });
 const normName = (s) => String(s || "").toLowerCase().trim();
 
 // Keep items.nameNorm in sync on both write paths: document saves
-// (create/save) and findOneAndUpdate $set patches.
-mealSchema.pre("validate", function (next) {
+// (create/save) and findOneAndUpdate $set patches. Hooks are synchronous —
+// Mongoose 9 removed callback-style next().
+mealSchema.pre("validate", function () {
   for (const it of this.items || []) {
     it.nameNorm = normName(it.name);
   }
-  next();
 });
 
-mealSchema.pre("findOneAndUpdate", function (next) {
+mealSchema.pre("findOneAndUpdate", function () {
   const update = this.getUpdate() || {};
   const items = update.$set?.items ?? update.items;
   if (Array.isArray(items)) {
@@ -94,7 +94,6 @@ mealSchema.pre("findOneAndUpdate", function (next) {
       if (it && typeof it === "object") it.nameNorm = normName(it.name);
     }
   }
-  next();
 });
 
 module.exports = mongoose.model("Meal", mealSchema);

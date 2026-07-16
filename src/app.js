@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
+const compression = require("compression");
 const mongoSanitize = require("express-mongo-sanitize");
 const path = require("path");
 const { responseHandler } = require("./middlewares/responseHandler");
@@ -64,6 +65,9 @@ app.set("trust proxy", 1);
 // Middleware
 app.use(helmet());
 app.use(cors(corsOptions));
+// Gzip JSON responses — the activity catalog and timeline payloads are tens
+// of KB raw; mobile clients shouldn't pay for that uncompressed.
+app.use(compression());
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ limit: "2mb", extended: true }));
 app.use((req, res, next) => {
