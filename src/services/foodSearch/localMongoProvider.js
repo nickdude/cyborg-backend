@@ -1,4 +1,5 @@
 const FoodItem = require("../../models/FoodItem");
+const { tokenize, bestFuzzyScore } = require("../../utils/fuzzy");
 
 /**
  * Local Mongo food search over the seeded FoodItem collection.
@@ -7,9 +8,36 @@ const FoodItem = require("../../models/FoodItem");
  * searchToken (multikey index keeps the anchored regexes cheap). This is what
  * makes "pane" find "paneer" — $text can't prefix-match.
  * Pass 2 — $text relevance fallback for multi-word queries when pass 1 is thin.
+ * Pass 3 — in-memory fuzzy fallback for typos ("panner" → "Paneer"): scores
+ * the query against a cached name/alias list and appends the survivors after
+ * the exact matches.
  */
 
 const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const FUZZY_THRESHOLD = 0.72;
+const CACHE_TTL_MS = 5 * 60 * 1000;
+
+// Cached {id, popularity, candidates: [[token,...], ...]} rows for the fuzzy
+// pass. ~1.5k rows ≈ a few hundred KB; refreshed lazily so seed runs show up.
+let fuzzyCache = null;
+let fuzzyCacheAt = 0;
+async function getFuzzyCache() {
+  if (fuzzyCache && Date.now() - fuzzyCacheAt < CACHE_TTL_MS) return fuzzyCache;
+  const rows = await FoodItem.find(
+    {},
+    { name: 1, nameNorm: 1, aliases: 1, popularity: 1 }
+  ).lean();
+  fuzzyCache = rows.map((r) => ({
+    id: String(r._id),
+    popularity: r.popularity || 0,
+    candidates: [r.nameNorm || r.name, ...(r.aliases || [])]
+      .map(tokenize)
+      .filter((t) => t.length > 0),
+  }));
+  fuzzyCacheAt = Date.now();
+  return fuzzyCache;
+}
 
 function toNormalized(doc) {
   const serving =
@@ -83,6 +111,34 @@ module.exports = {
       }
     }
 
-    return rank(docs, qNorm).slice(0, limit).map(toNormalized);
+    // Pass 3: fuzzy typo fallback. Kept out of `docs` so exact matches always
+    // rank ahead of guesses; within the fuzzy set, best score wins.
+    let fuzzyDocs = [];
+    if (docs.length < limit) {
+      const cache = await getFuzzyCache();
+      const seen = new Set(docs.map((d) => String(d._id)));
+      const scored = [];
+      for (const row of cache) {
+        if (seen.has(row.id)) continue;
+        const score = bestFuzzyScore(tokens, row.candidates);
+        if (score >= FUZZY_THRESHOLD) scored.push({ row, score });
+      }
+      scored.sort(
+        (a, b) => b.score - a.score || b.row.popularity - a.row.popularity
+      );
+      const ids = scored.slice(0, limit - docs.length).map((s) => s.row.id);
+      if (ids.length) {
+        const found = await FoodItem.find({ _id: { $in: ids } }).lean();
+        const order = new Map(ids.map((id, i) => [id, i]));
+        fuzzyDocs = found.sort(
+          (a, b) => order.get(String(a._id)) - order.get(String(b._id))
+        );
+      }
+    }
+
+    return rank(docs, qNorm)
+      .concat(fuzzyDocs)
+      .slice(0, limit)
+      .map(toNormalized);
   },
 };
