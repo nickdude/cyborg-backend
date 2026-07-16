@@ -256,7 +256,10 @@ async function doComputeAndSaveScore(meal) {
 
   await MealScore.findOneAndUpdate(
     { userId: meal.userId, mealId: meal._id },
-    { $set: doc },
+    // A rescore means the meal changed — drop the cached spiker analysis so
+    // the Day Review re-attributes against the CURRENT items instead of
+    // blaming an ingredient that may no longer be in the meal.
+    { $set: doc, $unset: { glucoseAnalysis: "" } },
     { upsert: true, new: true }
   );
 

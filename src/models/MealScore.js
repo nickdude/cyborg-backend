@@ -69,5 +69,7 @@ const mealScoreSchema = new mongoose.Schema(
 
 mealScoreSchema.index({ userId: 1, mealId: 1 }, { unique: true });
 mealScoreSchema.index({ userId: 1, computedAt: -1 });
+// The insights ingredient aggregation and timeline both join on mealId alone.
+mealScoreSchema.index({ mealId: 1 });
 
 module.exports = mongoose.model("MealScore", mealScoreSchema);

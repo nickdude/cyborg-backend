@@ -35,6 +35,8 @@ const getCatalog = async (req, res, next) => {
       return res.sendError("q must be 100 characters or fewer.", 400);
     }
     if (!raw) {
+      // The full catalog only changes on deploy — let clients reuse it.
+      res.set("Cache-Control", "private, max-age=86400");
       return res.sendSuccess(ACTIVITY_CATALOG, "Activity catalog retrieved");
     }
     const q = normalize(raw);

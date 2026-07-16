@@ -1,5 +1,6 @@
 const Meal = require("../models/Meal");
 const Activity = require("../models/Activity");
+const MealScore = require("../models/MealScore");
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -37,19 +38,36 @@ const getTimeline = async (req, res, next) => {
       }).lean(),
     ]);
 
+    // One score fetch for the whole day — meal entries carry their food
+    // score so consumers (Zone Score overlay, cards) don't need a request
+    // per meal.
+    const scores = meals.length
+      ? await MealScore.find(
+          { userId: req.user.id, mealId: { $in: meals.map((m) => m._id) } },
+          { mealId: 1, foodScore: 1, "predictedGlucosePeak.deltaMgDl": 1 }
+        ).lean()
+      : [];
+    const scoreByMeal = new Map(scores.map((s) => [String(s.mealId), s]));
+
     // Map to unified entry shape
-    const mealEntries = meals.map((m) => ({
-      type: "meal",
-      id: m._id,
-      time: m.consumedAt,
-      title: m.title,
-      data: {
-        mealType: m.mealType || null,
-        totals: m.totals,
-        items: m.items,
-        imageKeys: m.imageKeys,
-      },
-    }));
+    const mealEntries = meals.map((m) => {
+      const score = scoreByMeal.get(String(m._id));
+      return {
+        type: "meal",
+        id: m._id,
+        time: m.consumedAt,
+        title: m.title,
+        data: {
+          mealType: m.mealType || null,
+          totals: m.totals,
+          // Cards only render item names — full macros/portions per item
+          // (and imageKeys) just inflate the day-feed payload.
+          items: (m.items || []).map((i) => ({ name: i.name })),
+          foodScore: score?.foodScore ?? null,
+          deltaMgDl: score?.predictedGlucosePeak?.deltaMgDl ?? null,
+        },
+      };
+    });
 
     const activityEntries = activities.map((a) => ({
       type: "activity",
@@ -69,11 +87,21 @@ const getTimeline = async (req, res, next) => {
       (a, b) => new Date(b.time) - new Date(a.time)
     );
 
-    // Compute summary
-    const totalCaloriesConsumed = meals.reduce(
-      (sum, m) => sum + (m.totals?.calories || 0),
-      0
-    );
+    // Compute summary — including the day's macro totals so the dashboard
+    // macro split doesn't need a second summary request.
+    const macros = {
+      calories: 0,
+      proteinG: 0,
+      carbsG: 0,
+      fatG: 0,
+      fiberG: 0,
+      sugarG: 0,
+    };
+    for (const m of meals) {
+      for (const key of Object.keys(macros)) {
+        macros[key] += m.totals?.[key] || 0;
+      }
+    }
     const totalCaloriesBurned = activities.reduce(
       (sum, a) => sum + (a.caloriesBurned || 0),
       0
@@ -86,8 +114,9 @@ const getTimeline = async (req, res, next) => {
         summary: {
           mealCount: meals.length,
           activityCount: activities.length,
-          totalCaloriesConsumed,
+          totalCaloriesConsumed: macros.calories,
           totalCaloriesBurned,
+          macros,
         },
       },
       "Timeline retrieved"

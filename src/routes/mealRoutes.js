@@ -1,12 +1,14 @@
 const express = require("express");
 const router = express.Router();
 
-const { verifyToken, checkRole } = require("../middlewares/authMiddleware");
+const { verifyToken, checkRole, checkOwnership } = require("../middlewares/authMiddleware");
 const mealUpload = require("../config/mealUpload");
 const mealController = require("../controllers/mealController");
 
 // All routes are user-scoped and require auth.
 router.use(verifyToken, checkRole(["user"]));
+// Reject requests whose :userId path segment is not the authenticated user.
+router.use("/:userId", checkOwnership);
 
 // Multipart: up to 5 images as field name "images" + optional "description"
 router.post(
