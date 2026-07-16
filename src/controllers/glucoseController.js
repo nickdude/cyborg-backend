@@ -7,8 +7,7 @@
 const Meal = require("../models/Meal");
 const MealScore = require("../models/MealScore");
 const { computeGlucoseScore } = require("../services/glucoseScoring");
-const { getAnthropicClient, getModelName, extractJSON } = require("../providers/ai");
-const { buildFoodAlternativesPrompt } = require("../prompts/foodAlternatives");
+const { ensureGlucoseAnalysis } = require("../services/glucoseInsights");
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -18,39 +17,6 @@ function utcDayBounds(dateStr) {
   if (isNaN(start.getTime())) return null;
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
   return { start, end };
-}
-
-/**
- * Fetch AI-generated food alternatives for a meal with a poor score.
- * Best-effort — returns null on failure.
- */
-async function fetchAlternatives(meal, mealScore) {
-  try {
-    const client = getAnthropicClient();
-    const model = getModelName();
-
-    const { systemPrompt, userPrompt } = buildFoodAlternativesPrompt({
-      items: meal.items || [],
-      totals: meal.totals || {},
-      prediction: mealScore.predictedGlucosePeak || null,
-      foodScore: mealScore.foodScore,
-    });
-
-    const stream = client.messages.stream({
-      model,
-      max_tokens: 2048,
-      system: systemPrompt,
-      messages: [{ role: "user", content: [{ type: "text", text: userPrompt }] }],
-    });
-    const response = await stream.finalMessage();
-    const textBlock = response.content?.find((b) => b.type === "text");
-    const raw = textBlock?.text || "";
-    const parsed = extractJSON(raw);
-    return parsed || null;
-  } catch (err) {
-    console.error(`[Glucose] AI alternatives failed meal=${meal._id}: ${err.message}`);
-    return null;
-  }
 }
 
 // ── GET /:userId/glucose/day-review?date=YYYY-MM-DD ─────────────────
@@ -118,43 +84,10 @@ const getDayReview = async (req, res, next) => {
         totalScore += mealScore.foodScore;
         scoredCount++;
 
-        // For meals with score <= 4, generate alternatives (best-effort)
+        // For meals with score <= 4, generate alternatives (best-effort).
+        // ensureGlucoseAnalysis handles caching + persistence internally.
         if (mealScore.foodScore <= 4) {
-          // Use cached analysis if available
-          if (
-            mealScore.glucoseAnalysis &&
-            mealScore.glucoseAnalysis.spiker
-          ) {
-            entry.glucoseAnalysis = mealScore.glucoseAnalysis;
-          } else {
-            const analysis = await fetchAlternatives(meal, mealScore);
-            if (analysis) {
-              entry.glucoseAnalysis = {
-                spiker: analysis.spiker?.name || null,
-                spikerScore: mealScore.foodScore,
-                alternatives: [
-                  ...(analysis.alternatives || []).map((a) => ({
-                    ...a,
-                    type: "alternative",
-                  })),
-                  ...(analysis.blunters || []).map((b) => ({
-                    ...b,
-                    type: "blunter",
-                  })),
-                ],
-                explanation: analysis.spiker?.explanation || null,
-              };
-
-              // Persist the analysis on the MealScore document for caching
-              MealScore.findByIdAndUpdate(mealScore._id, {
-                $set: { glucoseAnalysis: entry.glucoseAnalysis },
-              }).catch((err) =>
-                console.error(
-                  `[Glucose] Failed to cache analysis for score=${mealScore._id}: ${err.message}`
-                )
-              );
-            }
-          }
+          entry.glucoseAnalysis = await ensureGlucoseAnalysis(meal, mealScore);
         }
       }
 

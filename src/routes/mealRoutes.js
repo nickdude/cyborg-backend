@@ -42,6 +42,9 @@ router.get("/:userId/meals/summary", mealController.getMealSummary);
 // Must stay above /:mealId or "recent-items" is parsed as a meal id.
 router.get("/:userId/meals/recent-items", mealController.getRecentItems);
 
+// Extra path segment, so no ordering conflict with /:mealId below.
+router.get("/:userId/meals/:mealId/insights", mealController.getMealInsights);
+
 router.get("/:userId/meals/:mealId", mealController.getMealById);
 
 router.patch("/:userId/meals/:mealId", mealController.updateMeal);

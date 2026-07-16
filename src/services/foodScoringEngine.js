@@ -177,11 +177,24 @@ function computeFoodScore(items, totals) {
 /**
  * Compute food score + AI glucose prediction for a meal, then save as
  * a MealScore document. Intended for fire-and-forget use after meal
- * creation.
+ * creation. Concurrent calls for the same meal (e.g. the commit-time
+ * background compute racing an insights-page compute-on-miss) share one
+ * in-flight run instead of double-billing the AI.
  *
  * @param {Object} meal - Mongoose Meal document (or plain object with _id, userId, items, totals)
  */
-async function computeAndSaveScore(meal) {
+const inflightScores = new Map();
+function computeAndSaveScore(meal) {
+  const key = String(meal._id);
+  if (inflightScores.has(key)) return inflightScores.get(key);
+  const run = doComputeAndSaveScore(meal).finally(() =>
+    inflightScores.delete(key)
+  );
+  inflightScores.set(key, run);
+  return run;
+}
+
+async function doComputeAndSaveScore(meal) {
   const MealScore = require("../models/MealScore");
   const { getAnthropicClient, getModelName, extractJSON } = require("../providers/ai");
   const { buildGlucosePredictionPrompt } = require("../prompts/glucosePrediction");

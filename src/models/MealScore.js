@@ -57,6 +57,9 @@ const mealScoreSchema = new mongoose.Schema(
       spikerScore: { type: Number },
       alternatives: { type: [alternativeSchema], default: [] },
       explanation: { type: String },
+      // Completion marker — lets a spiker-less analysis still count as a
+      // cache hit instead of re-running the AI on every request.
+      analyzedAt: { type: Date },
     },
     modelUsed: { type: String, default: "" },
     computedAt: { type: Date, default: Date.now },
