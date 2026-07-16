@@ -66,8 +66,18 @@ app.set("trust proxy", 1);
 app.use(helmet());
 app.use(cors(corsOptions));
 // Gzip JSON responses — the activity catalog and timeline payloads are tens
-// of KB raw; mobile clients shouldn't pay for that uncompressed.
-app.use(compression());
+// of KB raw; mobile clients shouldn't pay for that uncompressed. SSE is
+// exempt: zlib would buffer the event stream (the writes never flush), which
+// stalls concierge streaming until the response ends.
+app.use(
+  compression({
+    filter: (req, res) => {
+      const type = String(res.getHeader("Content-Type") || "");
+      if (type.includes("text/event-stream")) return false;
+      return compression.filter(req, res);
+    },
+  })
+);
 app.use(express.json({ limit: "2mb" }));
 app.use(express.urlencoded({ limit: "2mb", extended: true }));
 app.use((req, res, next) => {
