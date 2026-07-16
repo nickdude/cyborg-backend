@@ -12,6 +12,10 @@ const portionSchema = new mongoose.Schema(
 const itemSchema = new mongoose.Schema(
   {
     name: { type: String, required: true },
+    // Lowercased/trimmed name — kept in sync by the hooks below so
+    // cross-user ingredient aggregations can use an indexed exact match
+    // instead of an unindexable case-insensitive regex scan.
+    nameNorm: { type: String, default: null },
     portion: { type: portionSchema, default: () => ({}) },
     calories: { type: Number, default: 0 },
     proteinG: { type: Number, default: 0 },
@@ -69,5 +73,28 @@ const mealSchema = new mongoose.Schema(
 );
 
 mealSchema.index({ userId: 1, consumedAt: -1 });
+mealSchema.index({ "items.nameNorm": 1 });
+
+const normName = (s) => String(s || "").toLowerCase().trim();
+
+// Keep items.nameNorm in sync on both write paths: document saves
+// (create/save) and findOneAndUpdate $set patches.
+mealSchema.pre("validate", function (next) {
+  for (const it of this.items || []) {
+    it.nameNorm = normName(it.name);
+  }
+  next();
+});
+
+mealSchema.pre("findOneAndUpdate", function (next) {
+  const update = this.getUpdate() || {};
+  const items = update.$set?.items ?? update.items;
+  if (Array.isArray(items)) {
+    for (const it of items) {
+      if (it && typeof it === "object") it.nameNorm = normName(it.name);
+    }
+  }
+  next();
+});
 
 module.exports = mongoose.model("Meal", mealSchema);
