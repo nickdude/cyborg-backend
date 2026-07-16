@@ -45,6 +45,14 @@ class RazorpayGateway {
     return this.client.payments.fetch(transactionId);
   }
 
+  // Fetch all payments made against a gateway order. Used to detect an
+  // already-captured payment before starting a retry, so a user is never
+  // double-charged when the original verify call failed after money was taken.
+  async fetchOrderPayments(gatewayOrderId) {
+    const res = await this.client.orders.fetchPayments(gatewayOrderId);
+    return (res && res.items) || [];
+  }
+
   async refund(transactionId, amount) {
     return this.client.payments.refund(transactionId, amount ? { amount } : {});
   }

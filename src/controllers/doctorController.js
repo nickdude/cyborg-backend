@@ -483,8 +483,11 @@ const sendDoctorMessage = async (req, res, next) => {
       }
       await chat.save();
 
-      // Post-processing runs against the PATIENT's data (fire-and-forget)
-      runPostProcessing(patientId, chat._id.toString(), chat.messages)
+      // Post-processing is stored under the DOCTOR's id and marked as a doctor
+      // chat, so the doctor's private clinical deliberations never enter the
+      // patient's memory pool (CoreFacts/ChatSummary keyed by patientId). It also
+      // means no patient "health facts" are minted from a doctor conversation.
+      runPostProcessing(req.user.id, chat._id.toString(), chat.messages, "doctor")
         .catch((err) => console.error("[doctor][PostProcess] Unhandled error:", err.message));
     } catch (err) {
       console.error("[doctor][SSE] Stream error:", err);

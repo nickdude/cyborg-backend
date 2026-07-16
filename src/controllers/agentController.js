@@ -1,5 +1,7 @@
 const fs = require("fs");
 const path = require("path");
+const dns = require("dns").promises;
+const net = require("net");
 const mongoose = require("mongoose");
 const User = require("../models/User");
 const ReportData = require("../models/ReportData");
@@ -16,6 +18,63 @@ const BACKEND_ROOT = path.resolve(__dirname, "../../");
 
 const VISION_USER_PROMPT =
   "Extract every piece of data from this medical report into the JSON schema specified in your instructions. Be exhaustive — capture all tests, values, ranges, flags, patient details, and metadata.";
+
+/**
+ * Return true if an IP literal falls in a private / loopback / link-local /
+ * CGNAT range — the SSRF targets we must never fetch (cloud metadata at
+ * 169.254.169.254, internal services, localhost, etc.).
+ */
+function isPrivateAddress(ip) {
+  const v4 = ip.startsWith("::ffff:") ? ip.slice(7) : ip;
+  if (net.isIPv4(v4)) {
+    const [a, b] = v4.split(".").map(Number);
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 169 && b === 254) return true; // link-local incl. cloud metadata
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT
+    return false;
+  }
+  const lower = ip.toLowerCase();
+  if (lower === "::1" || lower === "::") return true;
+  if (lower.startsWith("fe80") || lower.startsWith("fc") || lower.startsWith("fd"))
+    return true;
+  return false;
+}
+
+/**
+ * Guard the remote-fetch branch of resolveFile against SSRF: allow only http(s),
+ * and reject any host that is (or resolves to) a private/loopback/link-local
+ * address. Combined with the AGENT_SECRET route gate this is defense-in-depth.
+ */
+async function assertSafeRemoteUrl(fileUrl) {
+  let url;
+  try {
+    url = new URL(fileUrl);
+  } catch {
+    throw new Error("Invalid file URL");
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error("Only http(s) file URLs are allowed");
+  }
+  const host = url.hostname;
+  if (host === "localhost" || host.endsWith(".localhost")) {
+    throw new Error("Refusing to fetch from a private host");
+  }
+  let addresses;
+  if (net.isIP(host)) {
+    addresses = [{ address: host }];
+  } else {
+    try {
+      addresses = await dns.lookup(host, { all: true });
+    } catch {
+      throw new Error("Could not resolve file host");
+    }
+  }
+  if (addresses.some((a) => isPrivateAddress(a.address))) {
+    throw new Error("Refusing to fetch from a private address");
+  }
+}
 
 /**
  * Resolve a file URL / path to a buffer.
@@ -55,7 +114,8 @@ async function resolveFile(fileUrl) {
     throw new Error("Local file paths must be within backend/uploads/");
   }
 
-  // Remote URL — fetch from S3 or CDN
+  // Remote URL — fetch from S3 or CDN (SSRF-guarded)
+  await assertSafeRemoteUrl(fileUrl);
   const response = await fetch(fileUrl);
   if (!response.ok)
     throw new Error(

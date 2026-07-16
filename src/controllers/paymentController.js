@@ -80,18 +80,23 @@ const getAllPlans = async (req, res, next) => {
  */
 const createOrder = async (req, res, next) => {
   try {
-    const { userId, planType, firstName, lastName, email, zip, dob, phone } = req.body;
+    const { planType, firstName, lastName, email, zip, dob, phone } = req.body;
+
+    // Authorization: act only on the authenticated user. A previous version took
+    // userId from the request body and fed it straight into findByIdAndUpdate,
+    // letting any logged-in caller overwrite ANY user's PII (IDOR).
+    const userId = req.user.id;
 
     // Validate required fields
-    if (!userId || !planType) {
-      return res.sendError("User ID and plan type are required", 400);
+    if (!planType) {
+      return res.sendError("Plan type is required", 400);
     }
 
     if (!firstName || !lastName || !email || !zip || !dob || !phone) {
       return res.sendError("All user details are required (firstName, lastName, email, zip, dob, phone)", 400);
     }
 
-    // Update user details before creating order
+    // Update the authenticated user's own details before creating the order.
     await User.findByIdAndUpdate(userId, {
       firstName,
       lastName,
@@ -149,7 +154,12 @@ const createOrder = async (req, res, next) => {
  */
 const verifyPayment = async (req, res, next) => {
   try {
-    const { userId, orderId, paymentId, signature, planType } = req.body;
+    const { orderId, paymentId, signature } = req.body;
+    const userId = req.user.id;
+
+    if (!orderId || !paymentId || !signature) {
+      return res.sendError("orderId, paymentId and signature are required", 400);
+    }
 
     // Verify signature
     const shasum = crypto.createHmac("sha256", process.env.RAZORPAY_KEY_SECRET);
@@ -160,17 +170,57 @@ const verifyPayment = async (req, res, next) => {
       return res.sendError("Payment verification failed", 400);
     }
 
-    // Get payment details from Razorpay
-    const payment = await razorpay.payments.fetch(paymentId);
+    // Idempotency: one captured Razorpay payment may create at most one
+    // subscription. A replayed or double-submitted verify returns the existing
+    // record instead of minting a duplicate paid subscription. (Backed by a
+    // unique index on razorpayPaymentId to also cover the concurrent-request race.)
+    const existing = await Subscription.findOne({ razorpayPaymentId: paymentId });
+    if (existing) {
+      return res.sendSuccess(
+        {
+          subscription: {
+            id: existing._id,
+            planType: existing.planType,
+            planName: existing.planName,
+            status: existing.status,
+            expiryDate: existing.expiryDate,
+          },
+          paymentId,
+        },
+        "Payment already verified",
+        200
+      );
+    }
 
+    // Fetch the payment and the order. The plan and the owning user are read from
+    // the ORDER we created server-side (its notes), NEVER from the client — that
+    // is what stops a caller from paying the cheap plan and claiming the pricey
+    // one, or binding someone else's payment to their account.
+    const payment = await razorpay.payments.fetch(paymentId);
     if (!payment || payment.status !== "captured") {
       return res.sendError("Payment not captured", 400);
     }
+    if (payment.order_id !== orderId) {
+      return res.sendError("Payment does not match the order", 400);
+    }
 
-    // Get plan details from the canonical catalog
+    const order = await razorpay.orders.fetch(orderId);
+    const planType = order?.notes?.planType;
+    const orderUserId = order?.notes?.userId;
+
     const plan = getPlan(planType);
     if (!plan) {
-      return res.sendError("Invalid plan type", 400);
+      return res.sendError("Invalid plan on order", 400);
+    }
+
+    // The order must belong to the authenticated user.
+    if (String(orderUserId) !== String(userId)) {
+      return res.sendError("This order does not belong to you", 403);
+    }
+
+    // The captured amount and currency must match the plan's real price.
+    if (payment.amount !== plan.amount || payment.currency !== plan.currency) {
+      return res.sendError("Paid amount does not match the selected plan", 400);
     }
 
     // Expiry is driven by the plan term (Advanced = 1 month, Auto-Pilot = 6 months)

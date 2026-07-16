@@ -15,16 +15,24 @@ const { streamChat } = require("../providers/ai");
  * @param {string} chatId
  * @param {Array}  messages - Chat.messages array (all messages including latest)
  */
-async function runPostProcessing(userId, chatId, messages) {
-  await Promise.allSettled([
-    updateCoreFacts(userId, messages).catch(err =>
-      console.error("[PostProcess] updateCoreFacts failed:", err.message)
-    ),
-    generateChatSummary(userId, chatId, messages).catch(err =>
+async function runPostProcessing(userId, chatId, messages, chatType = "patient") {
+  const tasks = [
+    generateChatSummary(userId, chatId, messages, chatType).catch(err =>
       console.error("[PostProcess] generateChatSummary failed:", err.message)
     ),
-  ]);
-  console.log(`[PostProcess] Done for chat ${chatId}`);
+  ];
+  // CoreFacts are the USER's persistent health facts (allergies, meds, etc.).
+  // A doctor's chat about a patient must never mint these, so only extract them
+  // for patient conversations.
+  if (chatType !== "doctor") {
+    tasks.unshift(
+      updateCoreFacts(userId, messages).catch(err =>
+        console.error("[PostProcess] updateCoreFacts failed:", err.message)
+      )
+    );
+  }
+  await Promise.allSettled(tasks);
+  console.log(`[PostProcess] Done for chat ${chatId} (${chatType})`);
 }
 
 // -- Core fact extraction -----------------------------------------------------
@@ -112,7 +120,7 @@ Instructions:
 
 // -- Chat summary generation --------------------------------------------------
 
-async function generateChatSummary(userId, chatId, messages) {
+async function generateChatSummary(userId, chatId, messages, chatType = "patient") {
   if (messages.length < 2) return;  // Not enough to summarize
 
   const conversationText = messages
@@ -168,6 +176,7 @@ Return ONLY the JSON.`;
     {
       chatId,
       userId,
+      chatType,
       summary: parsed.summary.slice(0, 600),
       keyTopics: (parsed.keyTopics || []).slice(0, 8),
       embedding,

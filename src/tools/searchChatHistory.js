@@ -74,9 +74,11 @@ async function execute(input, userId, chatId) {
     console.warn('[searchChatHistory] Vector search failed, using keyword fallback:', err.message);
   }
 
-  // Keyword fallback: search keyTopics and summary text
+  // Keyword fallback: search keyTopics and summary text. Exclude doctor-origin
+  // summaries as defense-in-depth (they are already stored under the doctor's
+  // id, so a patient-scoped query should never see one).
   const queryTokens = query.toLowerCase().split(/\s+/).filter(t => t.length > 2);
-  const summaries = await ChatSummary.find({ userId })
+  const summaries = await ChatSummary.find({ userId, chatType: { $ne: "doctor" } })
     .sort({ chatDate: -1 })
     .limit(50)
     .lean();

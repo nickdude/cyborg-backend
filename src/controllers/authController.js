@@ -466,8 +466,20 @@ const forgotPassword = async (req, res, next) => {
   try {
     const { email, phone } = req.body;
 
+    // Build the lookup from ONLY the identifier(s) actually supplied. A previous
+    // version used `{ $or: [{ email: email || null }, { phone: phone || null }] }`,
+    // which — when only email was sent — matched the first account whose phone is
+    // null, letting a reset land on (and take over) an arbitrary user's account.
+    const orConditions = [];
+    if (email) orConditions.push({ email });
+    if (phone) orConditions.push({ phone });
+
+    if (orConditions.length === 0) {
+      return res.sendError("Email or phone is required", 400);
+    }
+
     const user = await User.findOne({
-      $or: [{ email: email || null }, { phone: phone || null }],
+      $or: orConditions,
       isDeleted: false,
     });
 
@@ -594,42 +606,84 @@ const resendOTP = async (req, res, next) => {
 // ============== SOCIAL LOGIN ==============
 
 /**
- * Google/Facebook/Apple login
+ * Verify a Google OAuth access token server-side and return the trusted profile.
+ *
+ * The client must NEVER be trusted to state its own email/providerId — doing so
+ * lets anyone log in as any user simply by sending that user's email. We call
+ * Google's tokeninfo endpoint, which validates the token and returns the real
+ * `sub` (stable provider id) and `email`. When GOOGLE_CLIENT_ID is configured we
+ * also confirm the token was minted for THIS app (aud/azp) to block a token
+ * lifted from another Google application.
+ */
+async function verifyGoogleAccessToken(accessToken) {
+  const resp = await fetch(
+    `https://www.googleapis.com/oauth2/v3/tokeninfo?access_token=${encodeURIComponent(
+      accessToken
+    )}`
+  );
+  if (!resp.ok) throw new Error("Google token is invalid or expired");
+  const info = await resp.json();
+
+  const expectedAud = process.env.GOOGLE_CLIENT_ID;
+  if (expectedAud && info.aud !== expectedAud && info.azp !== expectedAud) {
+    throw new Error("Google token was not issued for this application");
+  }
+
+  const emailVerified =
+    info.email_verified === true || info.email_verified === "true";
+  if (!info.email || !emailVerified) {
+    throw new Error("Google account has no verified email");
+  }
+
+  return { email: String(info.email).toLowerCase(), providerId: info.sub };
+}
+
+/**
+ * Google login. The client sends the Google OAuth access token; we verify it
+ * with Google and derive the identity from the verified token only — never from
+ * client-supplied email/providerId/userType. New accounts are always created as
+ * regular users, so social login can never mint a doctor account (doctors are
+ * provisioned through a separate vetted flow).
  */
 const socialLogin = async (req, res, next) => {
   try {
-    const { provider, providerId, email, firstName, lastName, userType } = req.body;
+    const { provider, accessToken, firstName, lastName } = req.body;
 
-    if (!["google", "facebook", "apple"].includes(provider)) {
-      return res.sendError("Invalid provider", 400);
+    if (provider !== "google") {
+      return res.sendError("Unsupported social login provider", 400);
+    }
+    if (!accessToken) {
+      return res.sendError("Missing Google access token", 400);
     }
 
-    // Find user by provider ID or email
+    let verified;
+    try {
+      verified = await verifyGoogleAccessToken(accessToken);
+    } catch (err) {
+      console.error("[Auth] Google verification failed:", err.message);
+      return res.sendError("Google sign-in could not be verified", 401);
+    }
+    const { email, providerId } = verified;
+
+    // Match by the verified Google id first, then by the verified email.
     let user = await User.findOne({
-      $or: [
-        { [`${provider}Id`]: providerId },
-        { email: email || null },
-      ],
+      $or: [{ googleId: providerId }, { email }],
       isDeleted: false,
     });
 
     if (!user) {
-      // Create new user
       user = new User({
         email,
         firstName,
         lastName,
-        userType: userType || "user",
-        [`${provider}Id`]: providerId,
-        emailVerified: true, // Social login providers verify email
+        userType: "user", // never trust the client to request a doctor account
+        googleId: providerId,
+        emailVerified: true, // Google verified the email for us
       });
       await user.save();
-    } else {
-      // Update provider ID if not already set
-      if (!user[`${provider}Id`]) {
-        user[`${provider}Id`] = providerId;
-        await user.save();
-      }
+    } else if (!user.googleId) {
+      user.googleId = providerId;
+      await user.save();
     }
 
     // Generate token

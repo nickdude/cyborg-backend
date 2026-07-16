@@ -4,6 +4,9 @@ const { getVectorDb } = require("../config/vectorDb");
 const chatSummarySchema = new mongoose.Schema({
   chatId: { type: mongoose.Schema.Types.ObjectId, required: true, unique: true },
   userId: { type: mongoose.Schema.Types.ObjectId, required: true, index: true },
+  // Origin of the chat. Doctor-chat summaries are stored under the doctor's id,
+  // never the patient's, so they don't surface in the patient's AI recall.
+  chatType: { type: String, enum: ['patient', 'doctor'], default: 'patient' },
   summary: { type: String, required: true, maxlength: 600 },
   keyTopics: { type: [String], default: [] },
   embedding: { type: [Number], default: null },  // 3072 dims — gemini-embedding-001

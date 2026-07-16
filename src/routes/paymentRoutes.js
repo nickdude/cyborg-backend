@@ -1,5 +1,5 @@
 const express = require("express");
-const { verifyToken } = require("../middlewares/authMiddleware");
+const { verifyToken, checkOwnership } = require("../middlewares/authMiddleware");
 const {
   getAllPlans,
   createOrder,
@@ -23,8 +23,9 @@ router.post("/verify-payment", verifyToken, verifyPayment);
 // Activate a free plan (no Razorpay) — e.g. AMINO9 Baseline
 router.post("/activate-free", verifyToken, activateFreePlan);
 
-// Get user's current subscription
-router.get("/:userId/subscription", getUserSubscription);
+// Get user's current subscription — auth + ownership (self, or the patient's
+// linked doctor). Previously public, leaking any user's plan + Razorpay ids.
+router.get("/:userId/subscription", verifyToken, checkOwnership, getUserSubscription);
 
 // Razorpay webhook (no auth needed)
 router.post("/webhook", handleWebhook);
