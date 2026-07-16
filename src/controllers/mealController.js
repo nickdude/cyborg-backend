@@ -227,6 +227,8 @@ function attachImageUrls(meal) {
   return { ...meal, imageUrls: urls };
 }
 
+const MEAL_TYPES = new Set(["breakfast", "lunch", "dinner", "snack"]);
+
 // Derives a title from the first one or two items when the user leaves it blank.
 function autoTitleFromItems(items) {
   const names = (items || []).map((i) => i?.name).filter(Boolean);
@@ -257,6 +259,10 @@ const commitMeal = async (req, res, next) => {
     }
     if (imageKeys != null && !Array.isArray(imageKeys)) {
       return res.sendError("imageKeys must be an array of strings.", 400);
+    }
+    const mealType = body.mealType || null;
+    if (mealType != null && !MEAL_TYPES.has(mealType)) {
+      return res.sendError("mealType must be breakfast, lunch, dinner or snack.", 400);
     }
 
     // Validate every provided imageKey is a pending/ key that actually exists
@@ -299,6 +305,7 @@ const commitMeal = async (req, res, next) => {
       userId: req.user.id,
       title: finalTitle,
       consumedAt,
+      mealType,
       totals,
       items,
       imageKeys: committedKeys,
@@ -429,9 +436,52 @@ const getMealSummary = async (req, res, next) => {
   }
 };
 
+/**
+ * GET /api/users/:userId/meals/recent-items?limit=20
+ * Distinct food items from the user's recent meals, most-frequently logged
+ * first, deduped by (lowercased, trimmed) item name. The most recent
+ * occurrence supplies the portion + macros, so re-adding matches what the
+ * user last ate. Powers the "From your past logs" list.
+ */
+const getRecentItems = async (req, res, next) => {
+  try {
+    const raw = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(raw) ? Math.min(50, Math.max(1, raw)) : 20;
+    const userObjectId = new mongoose.Types.ObjectId(req.user.id);
+
+    const rows = await Meal.aggregate([
+      { $match: { userId: userObjectId } },
+      { $sort: { consumedAt: -1 } },
+      // Bound the scan so a long meal history can't blow up the unwind.
+      { $limit: 300 },
+      { $unwind: "$items" },
+      {
+        $group: {
+          _id: { $toLower: { $trim: { input: "$items.name" } } },
+          item: { $first: "$items" },
+          lastLoggedAt: { $first: "$consumedAt" },
+          count: { $sum: 1 },
+        },
+      },
+      { $sort: { count: -1, lastLoggedAt: -1 } },
+      { $limit: limit },
+    ]);
+
+    const items = rows.map((r) => ({
+      ...r.item,
+      count: r.count,
+      lastLoggedAt: r.lastLoggedAt,
+    }));
+    return res.sendSuccess(items, "Recent items retrieved");
+  } catch (error) {
+    next(error);
+  }
+};
+
 const PATCHABLE_FIELDS = new Set([
   "title",
   "consumedAt",
+  "mealType",
   "totals",
   "items",
   "inputText",
@@ -453,6 +503,12 @@ const updateMeal = async (req, res, next) => {
           return res.sendError("Invalid consumedAt timestamp.", 400);
         }
         update[key] = d;
+      } else if (key === "mealType") {
+        const mt = body[key] || null;
+        if (mt != null && !MEAL_TYPES.has(mt)) {
+          return res.sendError("mealType must be breakfast, lunch, dinner or snack.", 400);
+        }
+        update[key] = mt;
       } else {
         update[key] = body[key];
       }
@@ -523,6 +579,7 @@ module.exports = {
   listMeals,
   getMealHistory,
   getMealSummary,
+  getRecentItems,
   getMealById,
   updateMeal,
   deleteMeal,

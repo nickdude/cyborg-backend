@@ -1,5 +1,13 @@
 const Activity = require("../models/Activity");
 const ACTIVITY_CATALOG = require("../data/activityCatalog");
+const {
+  normalize,
+  tokenize,
+  bestFuzzyScore,
+  tokenSimilarity,
+} = require("../utils/fuzzy");
+
+const FUZZY_THRESHOLD = 0.72;
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -15,15 +23,65 @@ function utcDayBounds(dateStr) {
 
 /**
  * GET /:userId/activities/catalog?q=search
- * Returns the static activity catalog, optionally filtered by name.
+ * Returns the static activity catalog, optionally filtered by name/alias with
+ * a typo-tolerant fuzzy fallback ("badmington" still finds Badminton).
  */
 const getCatalog = async (req, res, next) => {
   try {
-    const q = (req.query.q || "").trim().toLowerCase();
-    const results = q
-      ? ACTIVITY_CATALOG.filter((a) => a.name.toLowerCase().includes(q))
-      : ACTIVITY_CATALOG;
-    return res.sendSuccess(results, "Activity catalog retrieved");
+    const raw = String(req.query.q || "").trim();
+    if (raw.length > 100) {
+      // The fuzzy scan is O(|q| × catalog tokens) of synchronous CPU — an
+      // unbounded q would let one request stall the event loop for seconds.
+      return res.sendError("q must be 100 characters or fewer.", 400);
+    }
+    if (!raw) {
+      return res.sendSuccess(ACTIVITY_CATALOG, "Activity catalog retrieved");
+    }
+    const q = normalize(raw);
+    // A query that normalizes to nothing (punctuation, non-Latin script)
+    // matches nothing — returning the full catalog here would read as a hit.
+    if (!q) {
+      return res.sendSuccess([], "Activity catalog retrieved");
+    }
+    const qTokens = q.split(" ").filter(Boolean);
+    const scored = [];
+    for (const a of ACTIVITY_CATALOG) {
+      const names = [a.name, ...(a.aliases || [])];
+      // Exact > prefix > substring > fuzzy, mirroring the frontend ranking.
+      let score = 0;
+      for (const n of names) {
+        const nn = normalize(n);
+        if (nn === q) {
+          score = 3;
+          break;
+        }
+        if (nn.startsWith(q)) score = Math.max(score, 2.5);
+        else if (nn.includes(q)) score = Math.max(score, 2);
+      }
+      if (score === 0) {
+        const fuzzy = bestFuzzyScore(qTokens, names.map(tokenize));
+        if (fuzzy >= FUZZY_THRESHOLD) score = fuzzy;
+      }
+      if (score > 0) {
+        // Tie-break: how well the first typed word matches the name's first
+        // word, so "badmington" ranks Badminton (Casual) over Ball Badminton.
+        const firstTokSim = tokenSimilarity(
+          qTokens[0] || "",
+          tokenize(a.name)[0] || ""
+        );
+        scored.push({ a, score, firstTokSim });
+      }
+    }
+    scored.sort(
+      (x, y) =>
+        y.score - x.score ||
+        y.firstTokSim - x.firstTokSim ||
+        x.a.name.length - y.a.name.length
+    );
+    return res.sendSuccess(
+      scored.map((s) => s.a),
+      "Activity catalog retrieved"
+    );
   } catch (error) {
     next(error);
   }

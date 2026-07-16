@@ -45,6 +45,11 @@ const mealSchema = new mongoose.Schema(
     },
     title: { type: String, default: "" },
     consumedAt: { type: Date, required: true },
+    mealType: {
+      type: String,
+      enum: ["breakfast", "lunch", "dinner", "snack", null],
+      default: null,
+    },
     totals: { type: totalsSchema, default: () => ({}) },
     items: { type: [itemSchema], default: [] },
     imageKeys: { type: [String], default: [] },
