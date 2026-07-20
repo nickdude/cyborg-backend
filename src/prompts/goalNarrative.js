@@ -24,6 +24,7 @@ RULES:
 - Keep summary to 2-3 sentences
 - Keep whatThisMeans to 3-5 sentences
 - Keep potentialCauses to 2-4 sentences
+- whatThisMeans and potentialCauses are displayed as one bullet point per sentence — make every sentence short and self-contained (one idea each, no "Together, ..." wrap-ups that lean on prior sentences)
 - For each goal, generate 1-3 achievementCriteria based on the primary biomarkers. These define when the goal is considered achieved. Also generate biomarkerTargets with realistic target values and expected timeline.
 
 OUTPUT FORMAT:

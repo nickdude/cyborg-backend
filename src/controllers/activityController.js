@@ -1,4 +1,6 @@
 const Activity = require("../models/Activity");
+const User = require("../models/User");
+const { generateRecoveryAnalysis } = require("../services/postWorkoutRecovery");
 const ACTIVITY_CATALOG = require("../data/activityCatalog");
 const {
   normalize,
@@ -233,6 +235,85 @@ const updateActivity = async (req, res, next) => {
 };
 
 /**
+ * GET /:userId/activities/:activityId/recovery?refresh=1
+ *
+ * AI post-workout recovery analysis (food recommendations + insights +
+ * practical tips). The first call generates via the AI provider and caches
+ * the result on the Activity document; subsequent calls return the cache
+ * unless ?refresh=1. Responds 502 when the AI call/parse fails.
+ */
+// A refresh inside this window still serves the cache — an authenticated user
+// looping ?refresh=1 must not translate into unbounded LLM spend.
+const RECOVERY_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
+
+const getRecoveryAnalysis = async (req, res, next) => {
+  try {
+    // Malformed ids would CastError into a 500 — treat them as not found.
+    if (!/^[0-9a-fA-F]{24}$/.test(String(req.params.activityId))) {
+      return res.sendError("Activity not found.", 404);
+    }
+    const activity = await Activity.findOne({
+      _id: req.params.activityId,
+      userId: req.user.id,
+    });
+    if (!activity) {
+      return res.sendError("Activity not found.", 404);
+    }
+
+    const cached = activity.recoveryAnalysis;
+    const cacheAgeMs = cached?.generatedAt
+      ? Date.now() - new Date(cached.generatedAt).getTime()
+      : Infinity;
+    const refresh =
+      ["1", "true"].includes(String(req.query.refresh || "")) &&
+      cacheAgeMs >= RECOVERY_REFRESH_COOLDOWN_MS;
+    if (!refresh && cached && cached.generatedAt) {
+      return res.sendSuccess(
+        { ...cached.toObject(), cached: true },
+        "Recovery analysis retrieved"
+      );
+    }
+
+    // Best-effort personalization — analysis still works for a missing user.
+    const user = await User.findById(req.user.id)
+      .select("firstName")
+      .lean()
+      .catch(() => null);
+
+    let analysis;
+    try {
+      analysis = await generateRecoveryAnalysis(activity, user);
+    } catch (err) {
+      console.error(
+        `[Recovery] AI analysis failed activity=${activity._id}: ${err.message}`
+      );
+      return res.sendError(
+        "AI recovery analysis is unavailable right now. Please try again.",
+        502
+      );
+    }
+
+    const stored = { ...analysis, generatedAt: new Date() };
+    // Cache best-effort — a failed save shouldn't fail the response.
+    try {
+      activity.recoveryAnalysis = stored;
+      await activity.save();
+    } catch (err) {
+      console.error(
+        `[Recovery] Failed to cache analysis activity=${activity._id}: ${err.message}`
+      );
+    }
+
+    return res.sendSuccess(
+      { ...stored, cached: false },
+      "Recovery analysis generated"
+    );
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
  * DELETE /:userId/activities/:activityId
  */
 const deleteActivity = async (req, res, next) => {
@@ -255,6 +336,7 @@ module.exports = {
   createActivity,
   listActivities,
   getActivityById,
+  getRecoveryAnalysis,
   updateActivity,
   deleteActivity,
 };

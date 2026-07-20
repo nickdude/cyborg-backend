@@ -11,4 +11,8 @@ router.use("/:userId", checkOwnership);
 
 router.get("/:userId/foods/search", foodSearchController.searchFoods);
 
+// Deterministic single-item insight: engine score + GI match + community
+// stats (no persistence, no AI).
+router.post("/:userId/foods/insight", foodSearchController.itemInsight);
+
 module.exports = router;

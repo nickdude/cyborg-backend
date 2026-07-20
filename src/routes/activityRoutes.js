@@ -18,6 +18,12 @@ router.get("/:userId/activities", activityController.listActivities);
 
 router.get("/:userId/activities/:activityId", activityController.getActivityById);
 
+// AI post-workout recovery analysis (generated once, cached on the activity).
+router.get(
+  "/:userId/activities/:activityId/recovery",
+  activityController.getRecoveryAnalysis
+);
+
 router.patch("/:userId/activities/:activityId", activityController.updateActivity);
 
 router.delete("/:userId/activities/:activityId", activityController.deleteActivity);

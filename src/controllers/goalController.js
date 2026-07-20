@@ -48,6 +48,7 @@ const listGoals = async (req, res, next) => {
         title: g.title,
         priority: g.priority,
         healthImpact: g.healthImpact,
+        category: g.category,
         summary: g.description,
         recoveryTimeWeeks: g.recoveryTimeWeeks,
         delta: g.delta,
@@ -70,6 +71,7 @@ const listGoals = async (req, res, next) => {
       title: g.title,
       priority: g.priority,
       healthImpact: g.healthImpact,
+      category: g.category,
       summary: g.summary,
       recoveryTimeWeeks: g.recoveryTimeWeeks,
     }));

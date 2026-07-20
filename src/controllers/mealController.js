@@ -8,14 +8,27 @@ const mealStorage = require("../utils/mealStorage");
 const {
   computeFoodScore,
   computeAndSaveScore,
-  matchGI,
 } = require("../services/foodScoringEngine");
 const { ensureGlucoseAnalysis } = require("../services/glucoseInsights");
+const {
+  ingredientStats,
+  typicalFromEngine,
+} = require("../services/foodInsights");
 const { mealParserSystemPrompt } = require("../prompts/mealParser");
-const { parseVision, extractJSON, getModelName, getAnthropicClient } = require("../providers/ai");
+const { parseVision, extractJSON, getModelName, getAnthropicClient, getProvider } = require("../providers/ai");
+const { analyzeMealAgentic } = require("../services/mealAnalyze");
 
 const MEAL_ANALYZE_MAX_TOKENS =
   Number(process.env.CLAUDE_MEAL_MAX_TOKENS) || 8192;
+
+// Agentic dataset-enrichment (lookup_food tool loop) is ON by default in this
+// env; set USE_FOOD_DB_TOOL=false to force the legacy single-shot path. When ON,
+// any agentic failure falls back to single-shot so the user never regresses.
+// The loop is Anthropic-only (it drives the Claude tool API directly), so it
+// stays off on a Gemini deployment rather than firing a guaranteed-failing
+// Anthropic round-trip before falling back.
+const USE_FOOD_DB_TOOL =
+  process.env.USE_FOOD_DB_TOOL !== "false" && getProvider() === "claude";
 
 // Build the multi-image Claude vision content block. parseVision() calls
 // the provider which already wraps system/user prompts — we just pass the
@@ -84,35 +97,39 @@ const analyzeMeal = async (req, res, next) => {
 
     let result;
     try {
-      // parseVision() in providers/ai.js takes a single buffer today. For
-      // single-image meals we reuse it directly to share the streaming path
-      // with blood reports. For multi-image and text-only cases we bypass
-      // parseVision and talk to the Anthropic streaming API ourselves —
-      // same pattern (stream().finalMessage()), just different content.
-      if (files.length > 1) {
-        // Build the vision content blocks only when we need them (multi-image path).
-        const imageContents = files.map((f) => ({
-          type: "image",
-          source: { type: "base64", media_type: f.mimetype, data: f.buffer.toString("base64") },
-        }));
-        result = await parseVisionMultiImage({
-          imageContents,
-          description,
-          maxTokens: MEAL_ANALYZE_MAX_TOKENS,
-        });
-      } else if (files.length === 1) {
-        result = await parseVision({
-          buffer: files[0].buffer,
-          mimeType: files[0].mimetype,
-          filename: f_safeName(files[0]),
-          systemPrompt: mealParserSystemPrompt,
-          userPrompt,
-          maxTokens: MEAL_ANALYZE_MAX_TOKENS,
-        });
+      if (USE_FOOD_DB_TOOL) {
+        // AGENTIC path: manual lookup_food tool loop that enriches macros from
+        // the curated INDB/IFCT dataset. Wrapped so ANY failure (tool-loop
+        // error, timeout, parse failure, cap exceeded with no final JSON)
+        // falls back to the legacy single-shot path — the user never gets a
+        // worse experience than today.
+        try {
+          const imageContents = files.map((f) => ({
+            type: "image",
+            source: { type: "base64", media_type: f.mimetype, data: f.buffer.toString("base64") },
+          }));
+          result = await analyzeMealAgentic({
+            imageContents,
+            userPrompt,
+            userId: req.user.id,
+            maxTokens: MEAL_ANALYZE_MAX_TOKENS,
+          });
+        } catch (agenticErr) {
+          console.warn(
+            `[Meals] Agentic dataset-enrichment failed user=${req.user.id}; falling back to single-shot: ${agenticErr.message}`
+          );
+          result = await runSingleShot({
+            files,
+            description,
+            userPrompt,
+            maxTokens: MEAL_ANALYZE_MAX_TOKENS,
+          });
+        }
       } else {
-        // Text-only — parseVision requires an image today. We go direct.
-        result = await parseVisionTextOnly({
+        result = await runSingleShot({
+          files,
           description,
+          userPrompt,
           maxTokens: MEAL_ANALYZE_MAX_TOKENS,
         });
       }
@@ -163,6 +180,33 @@ const analyzeMeal = async (req, res, next) => {
 
 function f_safeName(file) {
   return (file.originalname || "image").replace(/[^a-zA-Z0-9.\-_]/g, "_");
+}
+
+// Legacy single-shot analyze path — the pre-agentic behavior, unchanged. Used
+// directly when USE_FOOD_DB_TOOL is off, and as the fallback when the agentic
+// loop fails. parseVision() (single image) shares blood-report's streaming
+// path; multi-image and text-only go direct to the Anthropic streaming API.
+async function runSingleShot({ files, description, userPrompt, maxTokens }) {
+  if (files.length > 1) {
+    // Build the vision content blocks only when we need them (multi-image path).
+    const imageContents = files.map((f) => ({
+      type: "image",
+      source: { type: "base64", media_type: f.mimetype, data: f.buffer.toString("base64") },
+    }));
+    return parseVisionMultiImage({ imageContents, description, maxTokens });
+  }
+  if (files.length === 1) {
+    return parseVision({
+      buffer: files[0].buffer,
+      mimeType: files[0].mimetype,
+      filename: f_safeName(files[0]),
+      systemPrompt: mealParserSystemPrompt,
+      userPrompt,
+      maxTokens,
+    });
+  }
+  // Text-only — parseVision requires an image today. We go direct.
+  return parseVisionTextOnly({ description, maxTokens });
 }
 
 // Multi-image call: we bypass parseVision's single-image signature and go
@@ -330,6 +374,88 @@ const commitMeal = async (req, res, next) => {
     );
 
     return res.sendSuccess(attachImageUrls(meal.toObject()), "Meal saved", 201);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// Macro fields that must be numbers when present on a draft item / totals.
+const NUMERIC_MACRO_FIELDS = [
+  "grams",
+  "calories",
+  "proteinG",
+  "carbsG",
+  "fatG",
+  "fiberG",
+  "sugarG",
+];
+
+// Returns the first macro key whose value is present but not a finite
+// number, or null when the object is clean.
+function firstInvalidMacro(obj) {
+  for (const key of NUMERIC_MACRO_FIELDS) {
+    const v = obj[key];
+    if (v != null && (typeof v !== "number" || !Number.isFinite(v))) {
+      return key;
+    }
+  }
+  return null;
+}
+
+// Same limit foodSearchController.itemInsight enforces on a single name.
+const MAX_ITEM_NAME_LENGTH = 200;
+
+// Draft item names are optional here (unlike itemInsight, where name is the
+// whole request), but when present they must be strings — the scoring engine
+// calls matchGI(item.name).toLowerCase() and would throw on anything else.
+// Returns an error message, or null when the name is acceptable.
+function invalidItemName(item) {
+  const { name } = item;
+  if (name == null) return null;
+  if (typeof name !== "string") return "items.name must be a string.";
+  if (name.length > MAX_ITEM_NAME_LENGTH) return "items.name too long.";
+  return null;
+}
+
+/**
+ * POST /api/users/:userId/meals/score-preview
+ * JSON body: { items, totals } — draft-shaped, NOT persisted. Pure
+ * deterministic engine score for the in-progress basket. No DB writes,
+ * no AI.
+ */
+const scoreMealPreview = async (req, res, next) => {
+  try {
+    const { items, totals } = req.body || {};
+
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.sendError("items must be a non-empty array.", 400);
+    }
+    if (!totals || typeof totals !== "object" || Array.isArray(totals)) {
+      return res.sendError("totals is required.", 400);
+    }
+    for (const item of items) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return res.sendError("Each item must be an object.", 400);
+      }
+      const badName = invalidItemName(item);
+      if (badName) {
+        return res.sendError(badName, 400);
+      }
+      const bad = firstInvalidMacro(item);
+      if (bad) {
+        return res.sendError(`items.${bad} must be a number.`, 400);
+      }
+    }
+    const badTotal = firstInvalidMacro(totals);
+    if (badTotal) {
+      return res.sendError(`totals.${badTotal} must be a number.`, 400);
+    }
+
+    const { score, factors } = computeFoodScore(items, totals);
+    return res.sendSuccess(
+      { foodScore: score, factors },
+      "Score preview computed"
+    );
   } catch (error) {
     next(error);
   }
@@ -580,100 +706,8 @@ const getMealById = async (req, res, next) => {
 };
 
 // ── Meal insights (Day Review) ──────────────────────────────────────
-
-function clamp(n, lo, hi) {
-  return Math.min(hi, Math.max(lo, n));
-}
-
-/**
- * Community stats for one ingredient: aggregate across OTHER users' logged
- * meals whose items include this (normalized) name, joined to their scores.
- * The requesting user's own meals are excluded so "community" data never
- * echoes their own log back at them. Returns null when no scored meals match.
- */
-async function ingredientStats(normName, { excludeUserId } = {}) {
-  const match = { "items.nameNorm": normName }; // indexed exact match
-  if (excludeUserId) {
-    match.userId = { $ne: new mongoose.Types.ObjectId(String(excludeUserId)) };
-  }
-  const rows = await Meal.aggregate([
-    { $match: match },
-    // Bound the join so a very common ingredient can't blow up the lookup.
-    { $limit: 2000 },
-    {
-      $lookup: {
-        from: "meal_scores",
-        localField: "_id",
-        foreignField: "mealId",
-        as: "score",
-      },
-    },
-    { $unwind: "$score" },
-    {
-      $project: {
-        _id: 0,
-        foodScore: "$score.foodScore",
-        deltaMgDl: "$score.predictedGlucosePeak.deltaMgDl",
-      },
-    },
-  ]);
-
-  const scored = rows.filter((r) => typeof r.foodScore === "number");
-  if (scored.length === 0) return null;
-
-  // histogram[i] = count of meals with foodScore i+1
-  const histogram = new Array(10).fill(0);
-  let scoreSum = 0;
-  let deltaSum = 0;
-  let deltaCount = 0;
-  for (const r of scored) {
-    histogram[clamp(Math.round(r.foodScore), 1, 10) - 1]++;
-    scoreSum += r.foodScore;
-    if (typeof r.deltaMgDl === "number") {
-      deltaSum += r.deltaMgDl;
-      deltaCount++;
-    }
-  }
-
-  return {
-    count: scored.length,
-    histogram,
-    avgScore: Math.round((scoreSum / scored.length) * 10) / 10,
-    avgDeltaMgDl:
-      deltaCount > 0 ? Math.round((deltaSum / deltaCount) * 10) / 10 : null,
-  };
-}
-
-// Deterministic engine estimate for an ingredient nobody has logged yet —
-// NOT community data; the frontend labels it via source: "engine".
-function typicalFromEngine(item) {
-  // The item carries its own macro fields, so it doubles as its totals.
-  const { score: engineScore } = computeFoodScore([item], item);
-
-  const gi = matchGI(item.name);
-  const carbsG = item.carbsG || 0;
-  // Distrust a near-zero glycemic load on a carb-heavy item — the fuzzy GI
-  // matcher can hit the protein word of a composite dish ("Mutton biryani"
-  // → mutton, GI 0) and zero out the whole estimate.
-  const gl = gi ? (gi.gi * carbsG) / 100 : 0;
-  let deltaMgDl;
-  if (gi && !(gl < 1 && carbsG >= 15)) {
-    deltaMgDl = clamp(Math.round(3 * gl), 5, 80);
-  } else {
-    const netCarbsG = Math.max(0, carbsG - (item.fiberG || 0));
-    deltaMgDl = clamp(
-      Math.round(((item.sugarG || 0) * 1.5 + netCarbsG) * 1.2),
-      5,
-      80
-    );
-  }
-
-  // Keep score and delta coherent: a big estimated rise can't coexist with a
-  // near-perfect score (the same bogus GI match inflates the engine score).
-  const score = Math.min(engineScore, 10 - Math.floor(deltaMgDl / 12));
-
-  return { score, deltaMgDl, source: "engine" };
-}
+// ingredientStats + typicalFromEngine live in services/foodInsights so the
+// food-search insight endpoint shares the exact same logic.
 
 /**
  * GET /api/users/:userId/meals/:mealId/insights
@@ -804,6 +838,7 @@ const getMealInsights = async (req, res, next) => {
 module.exports = {
   analyzeMeal,
   commitMeal,
+  scoreMealPreview,
   listMeals,
   getMealHistory,
   getMealSummary,

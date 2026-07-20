@@ -35,6 +35,11 @@ router.post(
 
 router.post("/:userId/meals", mealController.commitMeal);
 
+// Deterministic engine score for an unsaved draft basket (no persistence,
+// no AI). Registered above the /:mealId param routes so "score-preview"
+// can never be parsed as a meal id.
+router.post("/:userId/meals/score-preview", mealController.scoreMealPreview);
+
 router.get("/:userId/meals", mealController.listMeals);
 
 router.get("/:userId/meals/history", mealController.getMealHistory);

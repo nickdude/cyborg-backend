@@ -203,6 +203,7 @@ function generateGoals(detectedIssues, onboardingData, biomarkerPanel) {
       priorityScore: maxPriorityScore,
       sumPriority,
       healthImpact: template.healthImpact,
+      category: template.category,
       recoveryTimeWeeks: template.recoveryTimeWeeks,
       biomarkersToImprove: allBiomarkers.slice(0, 8), // cap at 8 most relevant
       protocolItems: filteredProtocol,
