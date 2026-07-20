@@ -75,7 +75,10 @@ async function fetchGoalCitations(goal) {
     if (cached) return cached;
 
     const res = await querySonar({
-      model: "sonar-pro",
+      // `sonar-pro` consistently exceeds querySonar's 30s bound for these
+      // domain-filtered medical queries (→ timeout → empty citations); plain
+      // `sonar` returns the same peer-reviewed sources in ~10s. See probe.
+      model: "sonar",
       query: buildQuery(goal),
       systemPrompt:
         "You are a medical research assistant. Cite peer-reviewed studies only.",
