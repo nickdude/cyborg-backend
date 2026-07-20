@@ -4,7 +4,10 @@ const Payment = require("../models/Payment");
 const { canTransition, USER_CANCELLABLE } = require("../utils/orderStatus");
 const { notify, EVENTS, ORDER_STATUS_EVENT } = require("../services/notificationService");
 
-const isPrivileged = (req) => ["admin", "doctor"].includes(req.user?.userType);
+// Only admins get cross-user order reads. Doctors are treated as regular users
+// here (own orders only) — orders are commerce data unrelated to clinical care,
+// and blanket doctor access was a cross-customer PII/financial leak.
+const isPrivileged = (req) => req.user?.userType === "admin";
 
 // GET /api/orders  (current user's orders)
 const listOrders = async (req, res, next) => {

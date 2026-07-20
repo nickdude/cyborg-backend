@@ -348,7 +348,14 @@ const markWelcomeSeen = async (req, res, next) => {
  */
 const getAllUsers = async (req, res, next) => {
   try {
-    const users = await User.find({ userType: "user" })
+    // A doctor may only list patients LINKED to them (via their DR- referral
+    // code → the patient's linkedDoctor). Never return the whole user base —
+    // that was a mass cross-patient PII leak to any doctor account.
+    const users = await User.find({
+      userType: "user",
+      linkedDoctor: req.user.id,
+      isDeleted: { $ne: true },
+    })
       .select("firstName lastName email phone age registrationDate status")
       .sort({ createdAt: -1 });
 

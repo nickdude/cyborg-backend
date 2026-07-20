@@ -32,35 +32,16 @@ const generateReferralCode = async () => {
  * Step 1: Register user with email/phone
  * Sends OTP to verify
  */
-// Constant-time compare for the doctor signup code (avoids leaking it via
-// response timing). Guards length first because timingSafeEqual throws on
-// unequal-length buffers.
-const safeEqual = (a, b) => {
-  if (typeof a !== "string" || typeof b !== "string" || a.length !== b.length) {
-    return false;
-  }
-  return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
-};
-
 const register = async (req, res, next) => {
   try {
-    const { email, phone, password, referralCode } = req.body;
-    // SECURITY: the role is decided server-side. A public signup is always a
-    // "user" UNLESS it presents a valid doctor signup code — self-assigning
-    // "doctor" would otherwise grant blanket cross-patient PII/order access
-    // (mirrors socialLogin's "never trust the client" stance). Set
-    // DOCTOR_SIGNUP_CODE in the backend env and share it only with real doctors.
-    let userType = "user";
-    if (req.body.userType === "doctor") {
-      const expected = process.env.DOCTOR_SIGNUP_CODE;
-      if (!expected || !safeEqual(req.body.doctorSignupCode, expected)) {
-        return res.sendError(
-          "A valid doctor signup code is required to register a clinician account.",
-          403
-        );
-      }
-      userType = "doctor";
-    }
+    // userType is validated to "user"|"doctor" by validateAuthRequest. Doctor
+    // self-registration is intentionally open — a doctor's data access is
+    // SCOPED to patients LINKED to them (a patient links via the doctor's DR-
+    // referral code, which sets the patient's linkedDoctor). A newly registered
+    // doctor can therefore see nobody until a patient links to them. The scoping
+    // is enforced in getAllUsers, doctorController (listPatients/getPatient/
+    // verifyDoctorOwnership) and the checkOwnership middleware.
+    const { email, phone, userType, password, referralCode } = req.body;
 
     // Check if user already exists
     let existingUser = await User.findOne({
