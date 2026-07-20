@@ -360,10 +360,15 @@ const handleWebhook = async (req, res, next) => {
  */
 const activateFreePlan = async (req, res, next) => {
   try {
-    const { userId, planType, firstName, lastName, email, zip, dob, phone } = req.body;
+    // SECURITY: bind to the authenticated user — never trust a body userId
+    // (mirrors createOrder). Otherwise any authed user could overwrite another
+    // user's profile (email/phone/name) and mint a subscription against an
+    // arbitrary account by passing { userId: <victimId> }.
+    const { planType, firstName, lastName, email, zip, dob, phone } = req.body;
+    const userId = req.user.id;
 
-    if (!userId || !planType) {
-      return res.sendError("User ID and plan type are required", 400);
+    if (!planType) {
+      return res.sendError("Plan type is required", 400);
     }
 
     const plan = getPlan(planType);

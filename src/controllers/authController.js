@@ -34,7 +34,13 @@ const generateReferralCode = async () => {
  */
 const register = async (req, res, next) => {
   try {
-    const { email, phone, userType, password, referralCode } = req.body;
+    const { email, phone, password, referralCode } = req.body;
+    // SECURITY: never let a public registration self-assign a role. A
+    // client-supplied userType:"doctor" is accepted with no vetting and unlocks
+    // blanket cross-patient reads/writes (all-users PII, order data, etc.).
+    // Force "user" (mirrors socialLogin's "never trust the client" stance);
+    // doctor accounts must be provisioned through a vetted/admin channel.
+    const userType = "user";
 
     // Check if user already exists
     let existingUser = await User.findOne({
@@ -189,12 +195,16 @@ const verifyOTP = async (req, res, next) => {
     const otpExpiryField = `${type}OTPExpiry`;
     const verifiedField = `${type}Verified`;
 
-    // Check OTP validity
-    if (user[otpField] !== otp) {
+    // Check OTP validity. Reject a missing submitted OTP or an unset stored
+    // OTP: a channel the user never registered with has these fields undefined
+    // (select:false, no default), and `undefined !== undefined` would otherwise
+    // pass here — and `new Date() > undefined` (NaN) would pass the expiry check
+    // — letting an attacker verify + get a token by simply omitting `otp`.
+    if (!otp || user[otpField] == null || user[otpField] !== otp) {
       return res.sendError("Invalid OTP", 400);
     }
 
-    if (new Date() > user[otpExpiryField]) {
+    if (user[otpExpiryField] == null || new Date() > user[otpExpiryField]) {
       return res.sendError("OTP has expired", 400);
     }
 
@@ -528,18 +538,26 @@ const resetPassword = async (req, res, next) => {
   try {
     const { userId, resetToken, newPassword } = req.body;
 
+    if (!newPassword) {
+      return res.sendError("New password is required", 400);
+    }
+
     const user = await User.findById(userId).select("+resetToken +resetTokenExpiry +password");
 
     if (!user) {
       return res.sendError("User not found", 404);
     }
 
-    // Verify reset token
-    if (user.resetToken !== resetToken) {
+    // Verify reset token. Reject a missing submitted token or an unset stored
+    // token: a user who never requested a reset has resetToken undefined, and
+    // `undefined !== undefined` would otherwise pass here — and `new Date() >
+    // undefined` (NaN) would pass the expiry check — letting an attacker set a
+    // new password by simply omitting `resetToken`.
+    if (!resetToken || user.resetToken == null || user.resetToken !== resetToken) {
       return res.sendError("Invalid reset token", 400);
     }
 
-    if (new Date() > user.resetTokenExpiry) {
+    if (user.resetTokenExpiry == null || new Date() > user.resetTokenExpiry) {
       return res.sendError("Reset token has expired", 400);
     }
 
